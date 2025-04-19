@@ -269,6 +269,7 @@ export class ThreeJsDoGBumpMapper {
             img.crossOrigin = "Anonymous";
 
             img.onload = () => {
+                console.log(`[DoGBump] Image loaded (${img.width}×${img.height}):`, img.src)
                 // Create canvas and get image data
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
@@ -287,6 +288,46 @@ export class ThreeJsDoGBumpMapper {
                 outputCanvas.height = bumpMapData.height;
                 const outputCtx = outputCanvas.getContext('2d');
                 outputCtx.putImageData(bumpMapData, 0, 0);
+                
+                // …inside createBumpTexture, right after putImageData…
+
+                // === Preview injection ===
+                outputCanvas.style.cssText = `
+                position: fixed;
+                bottom: 10px;
+                right: 10px;
+                width: 128px;
+                height: 128px;
+                border: 2px solid #fff;
+                z-index: 9999;
+                `;
+                document.body.appendChild(outputCanvas);
+
+                // === Quick flat‑check log ===
+                const raw = bumpMapData.data; // Uint8ClampedArray
+                // grab the first 16 pixels’ gray values (every 4th byte)
+                const sample = [];
+                for (let i = 0; i < 16*4; i += 4) {
+                sample.push(raw[i]);
+                }
+                console.log("[DoGBump] bumpMap sample values:", sample);
+
+                // === Data‑URL conversion & preview img ===
+                const dataURL = outputCanvas.toDataURL();
+                console.log("[DoGBump] bumpMap data URL:", dataURL);
+
+                const previewImg = document.createElement('img');
+                previewImg.src = dataURL;
+                previewImg.style.cssText = `
+                position: fixed;
+                bottom: 10px;
+                left: 10px;
+                width: 128px;
+                border: 2px solid #fff;
+                z-index: 9999;
+                `;
+                document.body.appendChild(previewImg);
+
 
                 // Create Three.js texture from bump map
                 const texture = new THREE.Texture(outputCanvas);
@@ -296,6 +337,7 @@ export class ThreeJsDoGBumpMapper {
             };
 
             img.onerror = () => {
+                console.error(`[DoGBump] Failed to load image: ${img.src}`);
                 reject(new Error('Failed to load image'));
             };
 

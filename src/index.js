@@ -15,7 +15,7 @@ let currentOptions = {
 };
 
 // Sample image URL
-const imageUrl = new URL('./assets/textures/Clevelandart.jpg', import.meta.url).href;
+const imageUrl = new URL('./assets/textures/Bizarre_silk_textile_France.jpg', import.meta.url).href;
 // In a real project, you would use:
 // const imageUrl = new URL('../assets/textures/your-texture.jpg', import.meta.url).href;
 
@@ -77,20 +77,36 @@ function init() {
 
 // Apply the bump map with current options
 async function applyBumpMap() {
-    try {
-        // If we had a previous texture, dispose it properly
-        if (currentTexture) {
-            currentTexture.dispose();
-        }
-        
-        // Apply new bump map
-        currentTexture = await ThreeJsDoGBumpMapper.applyToMesh(plane, imageUrl, currentOptions);
-        
-        console.log("Bump map applied successfully");
-    } catch (error) {
-        console.error("Failed to apply bump map:", error);
+    console.groupCollapsed("%c[BumpMap] Applying new bump map", "color: teal; font-weight:bold");
+    console.log("Options:", currentOptions);
+    console.log("Source image URL:", imageUrl);
+  
+    if (currentTexture) {
+      console.log("Disposing previous texture", currentTexture);
+      currentTexture.dispose();
     }
-}
+  
+    const start = performance.now();
+    try {
+      currentTexture = await ThreeJsDoGBumpMapper.applyToMesh(plane, imageUrl, currentOptions);
+      const elapsed = (performance.now() - start).toFixed(1);
+  
+      // texture.image is the internal <canvas> or <img>
+      const w = currentTexture.image.width;
+      const h = currentTexture.image.height;
+  
+      console.log(`Texture size: ${w}×${h}`);
+      console.log(`Bump scale: ${currentOptions.bumpScale}`);
+      console.log(`⏱️ Completed in ${elapsed}ms`);
+      console.log("%c[BumpMap] Success ✅", "color: green;");
+  
+    } catch (error) {
+      console.error("%c[BumpMap] Failed ❌", "color: red; font-weight:bold", error);
+    }
+  
+    console.groupEnd();
+  }
+  
 
 // Set up the UI controls (using HTML controls)
 function setupControls() {
