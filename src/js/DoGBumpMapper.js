@@ -1,119 +1,76 @@
-// PDA-Based DoG Bump Mapping System
-// This implementation uses a pushdown automaton approach to generate
-// bump maps from images using Difference of Gaussians
+// DoG Bump Mapping System
+// This implementation uses Difference of Gaussians to generate bump maps from images
 
-export class DoGBumpMapPDA {
+/**
+ * Class for generating bump maps using Difference of Gaussians algorithm
+ */
+export class DoGBumpMapper {
+    /**
+     * Create a new DoG Bump Mapper
+     * @param {Object} options - Configuration options
+     * @param {number} [options.sigma1=1.0] - First Gaussian blur radius
+     * @param {number} [options.sigma2=2.0] - Second Gaussian blur radius
+     * @param {number} [options.heightScale=1.0] - Bump height multiplier
+     * @param {number} [options.threshold=0.1] - Edge detection threshold
+     * @param {boolean} [options.showDebugLogs=false] - Enable debug logging
+     */
     constructor(options = {}) {
         // Default parameters
-        this.sigma1 = options.sigma1 || 1.0;  // First Gaussian blur radius
-        this.sigma2 = options.sigma2 || 2.0;  // Second Gaussian blur radius
+        this.sigma1 = Math.max(0.1, options.sigma1 || 1.0);  // First Gaussian blur radius
+        this.sigma2 = Math.max(0.1, options.sigma2 || 2.0);  // Second Gaussian blur radius
         this.heightScale = options.heightScale || 1.0; // Bump height multiplier
         this.threshold = options.threshold || 0.1; // Edge detection threshold
-
-        // PDA states
-        this.states = {
-            INIT: 'init',
-            SCAN: 'scan',
-            PROCESS: 'process',
-            COMPARE: 'compare',
-            BUMP: 'bump',
-            ACCEPT: 'accept'
-        };
-
-        // Current state
-        this.currentState = this.states.INIT;
-
-        // Stack for the PDA
-        this.stack = [];
+        this.showDebugLogs = options.showDebugLogs || false; // Debug log toggle
 
         // Results
         this.bumpMap = null;
+        
+        // Kernel cache to avoid recalculation
+        this.kernelCache = new Map();
     }
 
-    // Main processing function
+    /**
+     * Main processing function
+     * @param {ImageData} imageData - Input image data
+     * @returns {ImageData} Generated bump map as ImageData
+     */
     generateBumpMap(imageData) {
+        if (!imageData || !imageData.width || !imageData.height) {
+            throw new Error('Invalid image data provided to DoGBumpMapper');
+        }
+        
         // Initialize with input image
         const width = imageData.width;
         const height = imageData.height;
-        this.stack.push({ type: 'original', data: this._cloneImageData(imageData) });
-        this.currentState = this.states.SCAN;
-
-        // Move to processing state
-        this._transition(null);
-
+        
+        // Clone the original image data
+        const originalImage = this._cloneImageData(imageData);
+        
+        // Apply Gaussian blurs at different scales
+        const blurredImage1 = this._applyGaussianBlur(originalImage, this.sigma1);
+        const blurredImage2 = this._applyGaussianBlur(originalImage, this.sigma2);
+        
+        // Compute difference of Gaussians
+        const dogResult = this._differenceOfGaussians(blurredImage1, blurredImage2);
+        
+        // Generate bump map values based on DoG results
+        this.bumpMap = this._generateBumpValues(dogResult);
+        
         return this.bumpMap;
     }
 
-    // PDA transition function
-    _transition(input) {
-        switch (this.currentState) {
-            case this.states.INIT:
-                this.currentState = this.states.SCAN;
-                break;
-
-            case this.states.SCAN:
-                // All data is already pushed to stack during initialization
-                this.currentState = this.states.PROCESS;
-                this._processGaussianBlurs();
-                break;
-
-            case this.states.PROCESS:
-                // After processing Gaussian blurs, move to comparison
-                this.currentState = this.states.COMPARE;
-                this._computeDoG();
-                break;
-
-            case this.states.COMPARE:
-                // After computing DoG, generate bump map
-                this.currentState = this.states.BUMP;
-                this._generateBumpValues();
-                break;
-
-            case this.states.BUMP:
-                // After generating bump values, accept the result
-                this.currentState = this.states.ACCEPT;
-                break;
-        }
-    }
-
-    // Apply Gaussian blurs at different scales and push to stack
-    _processGaussianBlurs() {
-        const originalImage = this.stack[0].data;
-
-        // Apply first Gaussian blur
-        const blurredImage1 = this._applyGaussianBlur(originalImage, this.sigma1);
-        this.stack.push({ type: 'gaussian', sigma: this.sigma1, data: blurredImage1 });
-
-        // Apply second Gaussian blur
-        const blurredImage2 = this._applyGaussianBlur(originalImage, this.sigma2);
-        this.stack.push({ type: 'gaussian', sigma: this.sigma2, data: blurredImage2 });
-
-        // Continue to next state
-        this._transition(null);
-    }
-
-    // Compute Difference of Gaussians
-    _computeDoG() {
-        // Pop the two Gaussian blurred images
-        const blurred2 = this.stack.pop().data;
-        const blurred1 = this.stack.pop().data;
-
-        // Compute difference
-        const dogResult = this._differenceOfGaussians(blurred1, blurred2);
-        this.stack.push({ type: 'dog', data: dogResult });
-
-        // Continue to next state
-        this._transition(null);
-    }
-
-    // Generate bump map values based on DoG results
-    _generateBumpValues() {
-        const dogImage = this.stack.pop().data;
+    /**
+     * Generate bump map values based on DoG results
+     * @param {ImageData} dogImage - Difference of Gaussians result
+     * @returns {ImageData} Generated bump map
+     * @private
+     */
+    _generateBumpValues(dogImage) {
         const width = dogImage.width;
         const height = dogImage.height;
 
         // Create output bump map
-        this.bumpMap = new ImageData(width, height);
+        const bumpMap = new ImageData(width, height);
 
         // Apply threshold and convert to height values
         for (let y = 0; y < height; y++) {
@@ -132,32 +89,39 @@ export class DoGBumpMapPDA {
                 }
 
                 // Store in RGB channels (normal maps typically use RGB)
-                this.bumpMap.data[idx] = bumpValue;
-                this.bumpMap.data[idx + 1] = bumpValue;
-                this.bumpMap.data[idx + 2] = bumpValue;
-                this.bumpMap.data[idx + 3] = 255; // Alpha
+                bumpMap.data[idx] = bumpValue;
+                bumpMap.data[idx + 1] = bumpValue;
+                bumpMap.data[idx + 2] = bumpValue;
+                bumpMap.data[idx + 3] = 255; // Alpha
             }
         }
 
-        // Continue to next state
-        this._transition(null);
+        return bumpMap;
     }
 
-    // Gaussian blur implementation (simplified)
+    /**
+     * Apply Gaussian blur to an image
+     * @param {ImageData} imageData - Input image data
+     * @param {number} sigma - Gaussian sigma (standard deviation)
+     * @returns {ImageData} Blurred image data
+     * @private
+     */
     _applyGaussianBlur(imageData, sigma) {
         const width = imageData.width;
         const height = imageData.height;
         const result = this._cloneImageData(imageData);
 
         // Kernel size based on sigma (typically 6*sigma)
+        // Ensure kernel size is odd for proper centering
         const kernelSize = Math.max(3, Math.ceil(sigma * 6));
-        const halfSize = Math.floor(kernelSize / 2);
+        const kernelSizeOdd = kernelSize % 2 === 0 ? kernelSize + 1 : kernelSize;
+        const halfSize = Math.floor(kernelSizeOdd / 2);
 
-        // Generate 1D Gaussian kernel for separable implementation
-        const kernel = this._generateGaussianKernel(sigma, kernelSize);
+        // Generate or retrieve 1D Gaussian kernel for separable implementation
+        const kernel = this._getGaussianKernel(sigma, kernelSizeOdd);
 
-        // Temporary buffer for horizontal pass
-        const tempBuffer = new Uint8ClampedArray(width * height * 4);
+        // Temporary buffer for horizontal pass - use Float32Array for better precision
+        const tempBuffer = new Float32Array(width * height * 4);
 
         // Horizontal pass
         for (let y = 0; y < height; y++) {
@@ -165,7 +129,12 @@ export class DoGBumpMapPDA {
                 let r = 0, g = 0, b = 0, weightSum = 0;
 
                 for (let i = -halfSize; i <= halfSize; i++) {
-                    const srcX = Math.min(width - 1, Math.max(0, x + i));
+                    // Better edge handling with mirror boundary condition
+                    let srcX = x + i;
+                    // Mirror boundary conditions
+                    if (srcX < 0) srcX = -srcX;
+                    if (srcX >= width) srcX = 2 * width - srcX - 2;
+                    
                     const srcIdx = (y * width + srcX) * 4;
                     const weight = kernel[i + halfSize];
 
@@ -176,9 +145,11 @@ export class DoGBumpMapPDA {
                 }
 
                 const destIdx = (y * width + x) * 4;
-                tempBuffer[destIdx] = r / weightSum;
-                tempBuffer[destIdx + 1] = g / weightSum;
-                tempBuffer[destIdx + 2] = b / weightSum;
+                // Avoid division by zero
+                const scale = weightSum > 0.00001 ? 1 / weightSum : 0;
+                tempBuffer[destIdx] = r * scale;
+                tempBuffer[destIdx + 1] = g * scale;
+                tempBuffer[destIdx + 2] = b * scale;
                 tempBuffer[destIdx + 3] = imageData.data[destIdx + 3]; // Copy alpha
             }
         }
@@ -189,7 +160,12 @@ export class DoGBumpMapPDA {
                 let r = 0, g = 0, b = 0, weightSum = 0;
 
                 for (let j = -halfSize; j <= halfSize; j++) {
-                    const srcY = Math.min(height - 1, Math.max(0, y + j));
+                    // Better edge handling with mirror boundary condition
+                    let srcY = y + j;
+                    // Mirror boundary conditions
+                    if (srcY < 0) srcY = -srcY;
+                    if (srcY >= height) srcY = 2 * height - srcY - 2;
+                    
                     const srcIdx = (srcY * width + x) * 4;
                     const weight = kernel[j + halfSize];
 
@@ -200,9 +176,11 @@ export class DoGBumpMapPDA {
                 }
 
                 const destIdx = (y * width + x) * 4;
-                result.data[destIdx] = r / weightSum;
-                result.data[destIdx + 1] = g / weightSum;
-                result.data[destIdx + 2] = b / weightSum;
+                // Avoid division by zero
+                const scale = weightSum > 0.00001 ? 1 / weightSum : 0;
+                result.data[destIdx] = Math.min(255, Math.max(0, r * scale));
+                result.data[destIdx + 1] = Math.min(255, Math.max(0, g * scale));
+                result.data[destIdx + 2] = Math.min(255, Math.max(0, b * scale));
                 result.data[destIdx + 3] = imageData.data[destIdx + 3]; // Copy alpha
             }
         }
@@ -210,7 +188,34 @@ export class DoGBumpMapPDA {
         return result;
     }
 
-    // Generate 1D Gaussian kernel
+    /**
+     * Get or generate 1D Gaussian kernel with caching
+     * @param {number} sigma - Gaussian sigma
+     * @param {number} size - Kernel size
+     * @returns {Array} Normalized kernel array
+     * @private
+     */
+    _getGaussianKernel(sigma, size) {
+        // Check if we have this kernel cached
+        const cacheKey = `${sigma}_${size}`;
+        if (this.kernelCache.has(cacheKey)) {
+            return this.kernelCache.get(cacheKey);
+        }
+        
+        // Generate new kernel
+        const kernel = this._generateGaussianKernel(sigma, size);
+        // Cache it for future use
+        this.kernelCache.set(cacheKey, kernel);
+        return kernel;
+    }
+
+    /**
+     * Generate 1D Gaussian kernel
+     * @param {number} sigma - Gaussian sigma
+     * @param {number} size - Kernel size
+     * @returns {Array} Normalized kernel array
+     * @private
+     */
     _generateGaussianKernel(sigma, size) {
         const kernel = new Array(size);
         const center = Math.floor(size / 2);
@@ -223,10 +228,20 @@ export class DoGBumpMapPDA {
 
         // Normalize kernel
         const sum = kernel.reduce((a, b) => a + b, 0);
+        if (sum < 0.00001) {
+            // Avoid division by zero
+            return kernel.map(() => 1.0 / size);
+        }
         return kernel.map(value => value / sum);
     }
 
-    // Compute difference between two images
+    /**
+     * Compute difference between two images
+     * @param {ImageData} image1 - First image
+     * @param {ImageData} image2 - Second image
+     * @returns {ImageData} Difference image
+     * @private
+     */
     _differenceOfGaussians(image1, image2) {
         const width = image1.width;
         const height = image1.height;
@@ -243,7 +258,12 @@ export class DoGBumpMapPDA {
         return result;
     }
 
-    // Clone image data
+    /**
+     * Clone image data
+     * @param {ImageData} imageData - Original image data
+     * @returns {ImageData} Cloned image data
+     * @private
+     */
     _cloneImageData(imageData) {
         const clone = new ImageData(
             new Uint8ClampedArray(imageData.data),
@@ -257,102 +277,192 @@ export class DoGBumpMapPDA {
 // Integration with Three.js
 import * as THREE from 'three';
 
+/**
+ * Three.js integration for DoG Bump Mapping
+ */
 export class ThreeJsDoGBumpMapper {
+    /**
+     * Create a new Three.js DoG Bump Mapper
+     * @param {Object} options - Configuration options for DoGBumpMapper
+     */
     constructor(options = {}) {
-        this.dogPDA = new DoGBumpMapPDA(options);
+        this.dogMapper = new DoGBumpMapper(options);
+        this.options = {
+            showPreviews: options.showPreviews !== undefined ? options.showPreviews : true,
+            previewSize: options.previewSize || 128,
+            debugLogs: options.debugLogs !== undefined ? options.debugLogs : false
+        };
+        
+        // Track previews for cleanup
+        this._previewElements = [];
     }
 
-    // Process an image and create a Three.js texture
+    /**
+     * Process an image and create a Three.js texture
+     * @param {string} imageUrl - URL of the image to process
+     * @returns {Promise<THREE.Texture>} Promise resolving to the created texture
+     */
     createBumpTexture(imageUrl) {
         return new Promise((resolve, reject) => {
+            // Clean up previous previews if they exist
+            this._cleanupPreviews();
+            
             const img = new Image();
             img.crossOrigin = "Anonymous";
 
             img.onload = () => {
-                console.log(`[DoGBump] Image loaded (${img.width}×${img.height}):`, img.src)
-                // Create canvas and get image data
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
-
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-                // Generate bump map
-                const bumpMapData = this.dogPDA.generateBumpMap(imageData);
-
-                // Create output canvas for the bump map
-                const outputCanvas = document.createElement('canvas');
-                outputCanvas.width = bumpMapData.width;
-                outputCanvas.height = bumpMapData.height;
-                const outputCtx = outputCanvas.getContext('2d');
-                outputCtx.putImageData(bumpMapData, 0, 0);
-                
-                // …inside createBumpTexture, right after putImageData…
-
-                // === Preview injection ===
-                outputCanvas.style.cssText = `
-                position: fixed;
-                bottom: 10px;
-                right: 10px;
-                width: 128px;
-                height: 128px;
-                border: 2px solid #fff;
-                z-index: 9999;
-                `;
-                document.body.appendChild(outputCanvas);
-
-                // === Quick flat‑check log ===
-                const raw = bumpMapData.data; // Uint8ClampedArray
-                // grab the first 16 pixels’ gray values (every 4th byte)
-                const sample = [];
-                for (let i = 0; i < 16*4; i += 4) {
-                sample.push(raw[i]);
+                if (this.options.debugLogs) {
+                    console.log(`[DoGBump] Image loaded (${img.width}×${img.height}):`, img.src);
                 }
-                console.log("[DoGBump] bumpMap sample values:", sample);
+                
+                try {
+                    // Create canvas and get image data
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
 
-                // === Data‑URL conversion & preview img ===
-                const dataURL = outputCanvas.toDataURL();
-                console.log("[DoGBump] bumpMap data URL:", dataURL);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-                const previewImg = document.createElement('img');
-                previewImg.src = dataURL;
-                previewImg.style.cssText = `
-                position: fixed;
-                bottom: 10px;
-                left: 10px;
-                width: 128px;
-                border: 2px solid #fff;
-                z-index: 9999;
-                `;
-                document.body.appendChild(previewImg);
+                    // Generate bump map
+                    const bumpMapData = this.dogMapper.generateBumpMap(imageData);
 
+                    // Create output canvas for the bump map
+                    const outputCanvas = document.createElement('canvas');
+                    outputCanvas.width = bumpMapData.width;
+                    outputCanvas.height = bumpMapData.height;
+                    const outputCtx = outputCanvas.getContext('2d');
+                    outputCtx.putImageData(bumpMapData, 0, 0);
+                    
+                    // Only add previews if enabled
+                    if (this.options.showPreviews) {
+                        this._createPreviews(outputCanvas);
+                    }
 
-                // Create Three.js texture from bump map
-                const texture = new THREE.Texture(outputCanvas);
-                texture.needsUpdate = true;
+                    // Create Three.js texture from bump map
+                    const texture = new THREE.Texture(outputCanvas);
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.needsUpdate = true;
 
-                resolve(texture);
+                    resolve(texture);
+                } catch (error) {
+                    console.error('[DoGBump] Error generating bump map:', error);
+                    reject(error);
+                }
             };
 
-            img.onerror = () => {
-                console.error(`[DoGBump] Failed to load image: ${img.src}`);
-                reject(new Error('Failed to load image'));
+            img.onerror = (error) => {
+                console.error(`[DoGBump] Failed to load image: ${imageUrl}`, error);
+                reject(new Error(`Failed to load image: ${imageUrl}`));
             };
 
             img.src = imageUrl;
         });
     }
 
-    // Static method to apply bump map to a mesh
+    /**
+     * Create and add preview elements to the DOM
+     * @param {HTMLCanvasElement} outputCanvas - Canvas containing the bump map
+     * @private
+     */
+    _createPreviews(outputCanvas) {
+        // Create and style output canvas preview
+        const canvasPreview = outputCanvas.cloneNode(true);
+        canvasPreview.className = 'dog-bump-preview';
+        canvasPreview.style.cssText = `
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            width: ${this.options.previewSize}px;
+            height: ${this.options.previewSize}px;
+            border: 2px solid #fff;
+            z-index: 9999;
+        `;
+        document.body.appendChild(canvasPreview);
+        this._previewElements.push(canvasPreview);
+
+        // Data URL conversion
+        const dataURL = outputCanvas.toDataURL();
+        
+        if (this.options.debugLogs) {
+            // Sample data check
+            const ctx = outputCanvas.getContext('2d');
+            const raw = ctx.getImageData(0, 0, 16, 1).data;
+            const sample = [];
+            for (let i = 0; i < 16*4; i += 4) {
+                sample.push(raw[i]);
+            }
+            console.log("[DoGBump] bumpMap sample values:", sample);
+            console.log("[DoGBump] bumpMap data URL:", dataURL);
+        }
+
+        // Create and style preview image
+        const previewImg = document.createElement('img');
+        previewImg.src = dataURL;
+        previewImg.className = 'dog-bump-preview-img';
+        previewImg.style.cssText = `
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            width: ${this.options.previewSize}px;
+            border: 2px solid #fff;
+            z-index: 9999;
+        `;
+        document.body.appendChild(previewImg);
+        this._previewElements.push(previewImg);
+    }
+
+    /**
+     * Remove any preview elements that were created
+     * @private
+     */
+    _cleanupPreviews() {
+        // Remove all preview elements from the DOM
+        this._previewElements.forEach(element => {
+            if (element && element.parentNode) {
+                element.parentNode.removeChild(element);
+            }
+        });
+        // Clear the array
+        this._previewElements = [];
+    }
+
+    /**
+     * Clean up resources when done
+     */
+    dispose() {
+        this._cleanupPreviews();
+        // Clear kernel cache to free memory
+        if (this.dogMapper.kernelCache) {
+            this.dogMapper.kernelCache.clear();
+        }
+    }
+
+    /**
+     * Static method to apply bump map to a mesh
+     * @param {THREE.Mesh} mesh - The mesh to apply the bump map to
+     * @param {string} imageUrl - URL of the image to process
+     * @param {Object} options - Configuration options
+     * @returns {Promise<THREE.Texture>} Promise resolving to the created texture
+     */
     static async applyToMesh(mesh, imageUrl, options = {}) {
+        if (!mesh) {
+            throw new Error('[DoGBump] Invalid mesh provided');
+        }
+        
         const mapper = new ThreeJsDoGBumpMapper(options);
         try {
             const bumpTexture = await mapper.createBumpTexture(imageUrl);
 
             // Apply as bump map to material
             if (mesh.material) {
+                // Dispose of previous bump map to avoid memory leaks
+                if (mesh.material.bumpMap) {
+                    mesh.material.bumpMap.dispose();
+                }
+                
                 mesh.material.bumpMap = bumpTexture;
                 mesh.material.bumpScale = options.bumpScale || 0.1;
                 mesh.material.needsUpdate = true;
@@ -360,8 +470,12 @@ export class ThreeJsDoGBumpMapper {
 
             return bumpTexture;
         } catch (error) {
-            console.error('Error applying bump map:', error);
+            console.error('[DoGBump] Error applying bump map:', error);
             throw error;
+        } finally {
+            // Clean up mapper resources but leave the texture
+            // (as it's now being used by the mesh)
+            mapper._cleanupPreviews();
         }
     }
 }
