@@ -3,34 +3,18 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ThreeJsDoGBumpMapper } from './js/DoGBumpMapper.js';
 import { ThreeJsBumpToNormalMapper } from './js/BumpToNormalMapper.js';
 import { ThreeJsAlbedoMapper } from './js/albedoMapper.js';
+import { ThreeJsEmissionMapper } from './js/emissionMapper.js';
+import { StateManager } from './stateManager.js';
+import { UserInterface } from './userInterface.js';
 import './css/styles.css';
 
 // Global variables
 let scene, camera, renderer, controls;
-let plane, currentTexture, currentBumpTexture, currentNormalTexture, currentAlbedoTexture;
-let currentBumpOptions = {
-    sigma1: 1.0,
-    sigma2: 2.0,
-    heightScale: 1.0,
-    bumpScale: 0.1,
-    threshold: 0.1
-};
-let currentNormalOptions = {
-    strength: 1.0,
-    normalScale: 1.0
-};
-let currentAlbedoOptions = {
-    brightness: 1.0,
-    contrast:   1.0,
-    saturation: 1.0
-};
-let useNormalMap = true;   // Generate normal maps by default
-let useAlbedoMap  = true;  // Generate albedo maps by default
-let processingInProgress = false;
-let pendingUpdate       = false;
-
-// Sample image URL
-let imageUrl = new URL('./assets/textures/nebula.jpg', import.meta.url).href;
+let plane;
+let stateManager;
+let userInterface;
+let clock;
+let frameCount = 0;
 
 // Debounce helper
 function debounce(func, wait) {
@@ -42,41 +26,271 @@ function debounce(func, wait) {
     };
 }
 
-// File input handler
-function handleFileSelect(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-        alert('Please select an image file');
-        return;
+// Apply bump map
+async function applyBumpMap() {
+    const state = stateManager.getState();
+    const bumpOptions = state.bumpOptions;
+    const imageUrl = state.resources.imageUrl;
+    
+    console.groupCollapsed("%c[BumpMap] Applying new bump map", "color: teal; font-weight:bold");
+    console.log("Options:", Object.assign({}, bumpOptions));
+    console.log("Source image URL:", imageUrl);
+
+    const currentBumpTexture = state.textures.bumpTexture;
+    if (currentBumpTexture) {
+        console.log("Disposing previous texture");
+        currentBumpTexture.dispose();
     }
-    const newImageUrl = URL.createObjectURL(file);
-    console.log("Loading image from file:", file.name);
-    if (typeof imageUrl === 'string' && imageUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(imageUrl);
+
+    const start = performance.now();
+    try {
+        if (!imageUrl) throw new Error("No image URL provided");
+        const bumpTexture = await ThreeJsDoGBumpMapper.applyToMesh(plane, imageUrl, bumpOptions);
+        const elapsed = (performance.now() - start).toFixed(1);
+        if (!bumpTexture || !bumpTexture.image) throw new Error("Failed to create bump texture");
+        const w = bumpTexture.image.width, h = bumpTexture.image.height;
+        console.log(`Texture size: ${w}×${h}`);
+        console.log(`Bump scale: ${bumpOptions.bumpScale}`);
+        console.log(`⏱️ Completed in ${elapsed}ms`);
+        console.log("%c[BumpMap] Success ✅", "color: green;");
+        
+        // Update texture in state
+        stateManager.updateState({
+            textures: { bumpTexture }
+        });
+        
+        return bumpTexture;
+    } catch (error) {
+        console.error("%c[BumpMap] Failed ❌", "color: red; font-weight:bold", error);
+        userInterface.showErrorMessage(`Failed to create bump map: ${error.message}`);
+        throw error;
+    } finally {
+        console.groupEnd();
     }
-    imageUrl = newImageUrl;
-    updateImagePreview();
-    applyMaps();
 }
 
-// Update preview div
-function updateImagePreview() {
-    const preview = document.getElementById('image-preview');
-    if (preview && imageUrl) {
-        preview.style.backgroundImage = `url(${imageUrl})`;
-        preview.style.height = '100px';
-        preview.style.backgroundSize = 'contain';
-        preview.style.backgroundRepeat = 'no-repeat';
-        preview.style.backgroundPosition = 'center';
-        preview.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-        preview.style.border = '1px solid rgba(255, 255, 255, 0.3)';
-        preview.style.marginTop = '10px';
+// Apply normal map
+async function applyNormalMap(bumpTexture) {
+    const state = stateManager.getState();
+    const normalOptions = state.normalOptions;
+    
+    console.groupCollapsed("%c[NormalMap] Applying new normal map", "color: purple; font-weight:bold");
+    console.log("Options:", Object.assign({}, normalOptions));
+
+    const currentNormalTexture = state.textures.normalTexture;
+    if (currentNormalTexture) {
+        console.log("Disposing previous normal texture");
+        currentNormalTexture.dispose();
+    }
+
+    const start = performance.now();
+    try {
+        if (!bumpTexture || !bumpTexture.image) throw new Error("Invalid bump texture provided");
+        const normalTexture = await ThreeJsBumpToNormalMapper.applyToMesh(plane, bumpTexture, normalOptions);
+        const elapsed = (performance.now() - start).toFixed(1);
+        if (!normalTexture || !normalTexture.image) throw new Error("Failed to create normal texture");
+        const w = normalTexture.image.width, h = normalTexture.image.height;
+        console.log(`Normal texture size: ${w}×${h}`);
+        console.log(`Normal scale: ${normalOptions.normalScale}`);
+        console.log(`⏱️ Completed in ${elapsed}ms`);
+        console.log("%c[NormalMap] Success ✅", "color: green;");
+        
+        // Update texture in state
+        stateManager.updateState({
+            textures: { normalTexture }
+        });
+        
+        // Apply normal map to material if enabled
+        if (plane && plane.material) {
+            plane.material.normalMap = state.flags.useNormalMap ? normalTexture : null;
+            plane.material.needsUpdate = true;
+        }
+        
+        return normalTexture;
+    } catch (error) {
+        console.error("%c[NormalMap] Failed ❌", "color: red; font-weight:bold", error);
+        userInterface.showErrorMessage(`Failed to create normal map: ${error.message}`);
+        throw error;
+    } finally {
+        console.groupEnd();
     }
 }
+
+// Apply albedo map
+async function applyAlbedoMap() {
+    const state = stateManager.getState();
+    const albedoOptions = state.albedoOptions;
+    const imageUrl = state.resources.imageUrl;
+    
+    console.groupCollapsed("%c[AlbedoMap] Applying new albedo map", "color: teal; font-weight:bold");
+    console.log("Options:", Object.assign({}, albedoOptions));
+
+    const currentAlbedoTexture = state.textures.albedoTexture;
+    if (currentAlbedoTexture) {
+        console.log("Disposing previous albedo texture");
+        currentAlbedoTexture.dispose();
+    }
+
+    const start = performance.now();
+    try {
+        if (!imageUrl) throw new Error("No image URL provided");
+        const albedoTexture = await ThreeJsAlbedoMapper.applyToMesh(plane, imageUrl, albedoOptions);
+        const elapsed = (performance.now() - start).toFixed(1);
+        if (!albedoTexture || !albedoTexture.image) throw new Error("Failed to create albedo texture");
+        const w = albedoTexture.image.width, h = albedoTexture.image.height;
+        console.log(`Albedo texture size: ${w}×${h}`);
+        console.log(`⏱️ Completed in ${elapsed}ms`);
+        console.log("%c[AlbedoMap] Success ✅", "color: green;");
+        
+        // Update texture in state
+        stateManager.updateState({
+            textures: { albedoTexture }
+        });
+        
+        return albedoTexture;
+    } catch (error) {
+        console.error("%c[AlbedoMap] Failed ❌", "color: red; font-weight:bold", error);
+        userInterface.showErrorMessage(`Failed to create albedo map: ${error.message}`);
+        throw error;
+    } finally {
+        console.groupEnd();
+    }
+}
+
+// Apply emission map
+async function applyEmissionMap() {
+    const state = stateManager.getState();
+    const emissionOptions = state.emissionOptions;
+    const imageUrl = state.resources.imageUrl;
+    
+    console.groupCollapsed("%c[EmissionMap] Applying new emission map", "color: orange; font-weight:bold");
+    console.log("Options:", Object.assign({}, emissionOptions));
+
+    const currentEmissionTexture = state.textures.emissionTexture;
+    if (currentEmissionTexture) {
+        console.log("Disposing previous emission texture");
+        currentEmissionTexture.dispose();
+    }
+
+    const start = performance.now();
+    try {
+        if (!imageUrl) throw new Error("No image URL provided");
+        const emissionTexture = await ThreeJsEmissionMapper.applyToMesh(plane, imageUrl, emissionOptions);
+        const elapsed = (performance.now() - start).toFixed(1);
+        if (!emissionTexture || !emissionTexture.image) throw new Error("Failed to create emission texture");
+        const w = emissionTexture.image.width, h = emissionTexture.image.height;
+        console.log(`Emission texture size: ${w}×${h}`);
+        console.log(`⏱️ Completed in ${elapsed}ms`);
+        console.log("%c[EmissionMap] Success ✅", "color: green;");
+        
+        // Update texture in state
+        stateManager.updateState({
+            textures: { emissionTexture }
+        });
+        
+        return emissionTexture;
+    } catch (error) {
+        console.error("%c[EmissionMap] Failed ❌", "color: red; font-weight:bold", error);
+        userInterface.showErrorMessage(`Failed to create emission map: ${error.message}`);
+        throw error;
+    } finally {
+        console.groupEnd();
+    }
+}
+
+// Combined applyMaps
+async function applyMaps() {
+    const state = stateManager.getState();
+    
+    // Check if processing is already in progress
+    if (state.flags.processingInProgress) {
+        stateManager.updateState({
+            flags: { pendingUpdate: true }
+        });
+        return;
+    }
+    
+    stateManager.updateState({
+        flags: { processingInProgress: true }
+    });
+    userInterface.showLoadingIndicator(true);
+
+    try {
+        const bumpTexture = await applyBumpMap();
+        
+        if (state.flags.useNormalMap) {
+            await applyNormalMap(bumpTexture);
+        } else if (plane && plane.material) {
+            plane.material.normalMap = null;
+            plane.material.needsUpdate = true;
+        }
+        
+        if (state.flags.useAlbedoMap) {
+            const albedoTexture = await applyAlbedoMap();
+            if (plane && plane.material) {
+                plane.material.map = albedoTexture;
+                plane.material.needsUpdate = true;
+            }
+        } else if (plane && plane.material) {
+            if (plane.material.map) {
+                plane.material.map.dispose();
+            }
+            plane.material.map = null;
+            plane.material.needsUpdate = true;
+        }
+        
+        if (state.flags.useEmissionMap) {
+            const emissionTexture = await applyEmissionMap();
+            if (plane && plane.material) {
+                plane.material.emissiveMap = emissionTexture;
+                plane.material.emissive.set(new THREE.Color(state.emissionOptions.color));
+                plane.material.emissiveIntensity = state.emissionOptions.intensity;
+                plane.material.needsUpdate = true;
+            }
+        } else if (plane && plane.material) {
+            if (plane.material.emissiveMap) {
+                plane.material.emissiveMap.dispose();
+            }
+            plane.material.emissiveMap = null;
+            plane.material.emissive.set(0x000000);
+            plane.material.emissiveIntensity = 0;
+            plane.material.needsUpdate = true;
+        }
+    } catch (error) {
+        console.error("Error applying maps:", error);
+    } finally {
+        const updatedState = stateManager.getState();
+        stateManager.updateState({
+            flags: { 
+                processingInProgress: false 
+            }
+        });
+        userInterface.showLoadingIndicator(false);
+        
+        if (updatedState.flags.pendingUpdate) {
+            stateManager.updateState({
+                flags: { pendingUpdate: false }
+            });
+            setTimeout(applyMaps, 50);
+        }
+    }
+}
+
+const debouncedApplyMaps = debounce(applyMaps, 300);
 
 // Initialize the scene
 function init() {
+    // Initialize state manager with default settings
+    stateManager = new StateManager({
+        resources: {
+            imageUrl: new URL('./assets/textures/nebula.jpg', import.meta.url).href
+        }
+    });
+    
+    // Try to load saved state
+    stateManager.loadFromLocalStorage();
+    
+    // Initialize scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x333333);
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -121,290 +335,69 @@ function init() {
     scene.add(plane);
 
     window.addEventListener('resize', onWindowResize);
-    setupControls();
-
-    showLoadingIndicator(true);
-    setTimeout(() => {
-        applyMaps().finally(() => showLoadingIndicator(false));
-    }, 100);
-
-    animate();
-}
-
-// Loading indicator
-function showLoadingIndicator(show) {
-    const loadingElement = document.getElementById('loading-indicator');
-    if (!loadingElement) {
-        if (show) {
-            const loader = document.createElement('div');
-            loader.id = 'loading-indicator';
-            loader.style.position = 'fixed';
-            loader.style.top = '10px';
-            loader.style.right = '10px';
-            loader.style.background = 'rgba(0,0,0,0.7)';
-            loader.style.color = 'white';
-            loader.style.padding = '8px 15px';
-            loader.style.borderRadius = '4px';
-            loader.style.zIndex = '1000';
-            loader.textContent = 'Processing...';
-            document.body.appendChild(loader);
-        }
-    } else {
-        loadingElement.style.display = show ? 'block' : 'none';
-    }
-}
-
-// Apply bump map
-async function applyBumpMap() {
-    console.groupCollapsed("%c[BumpMap] Applying new bump map", "color: teal; font-weight:bold");
-    console.log("Options:", Object.assign({}, currentBumpOptions));
-    console.log("Source image URL:", imageUrl);
-
-    if (currentBumpTexture) {
-        console.log("Disposing previous texture");
-        currentBumpTexture.dispose();
-    }
-
-    const start = performance.now();
-    try {
-        if (!imageUrl) throw new Error("No image URL provided");
-        currentBumpTexture = await ThreeJsDoGBumpMapper.applyToMesh(plane, imageUrl, currentBumpOptions);
-        const elapsed = (performance.now() - start).toFixed(1);
-        if (!currentBumpTexture || !currentBumpTexture.image) throw new Error("Failed to create bump texture");
-        const w = currentBumpTexture.image.width, h = currentBumpTexture.image.height;
-        console.log(`Texture size: ${w}×${h}`);
-        console.log(`Bump scale: ${currentBumpOptions.bumpScale}`);
-        console.log(`⏱️ Completed in ${elapsed}ms`);
-        console.log("%c[BumpMap] Success ✅", "color: green;");
-        return currentBumpTexture;
-    } catch (error) {
-        console.error("%c[BumpMap] Failed ❌", "color: red; font-weight:bold", error);
-        showErrorMessage(`Failed to create bump map: ${error.message}`);
-        throw error;
-    } finally {
-        console.groupEnd();
-    }
-}
-
-// Apply normal map
-async function applyNormalMap(bumpTexture) {
-    console.groupCollapsed("%c[NormalMap] Applying new normal map", "color: purple; font-weight:bold");
-    console.log("Options:", Object.assign({}, currentNormalOptions));
-
-    if (currentNormalTexture) {
-        console.log("Disposing previous normal texture");
-        currentNormalTexture.dispose();
-    }
-
-    const start = performance.now();
-    try {
-        if (!bumpTexture || !bumpTexture.image) throw new Error("Invalid bump texture provided");
-        currentNormalTexture = await ThreeJsBumpToNormalMapper.applyToMesh(plane, bumpTexture, currentNormalOptions);
-        const elapsed = (performance.now() - start).toFixed(1);
-        if (!currentNormalTexture || !currentNormalTexture.image) throw new Error("Failed to create normal texture");
-        const w = currentNormalTexture.image.width, h = currentNormalTexture.image.height;
-        console.log(`Normal texture size: ${w}×${h}`);
-        console.log(`Normal scale: ${currentNormalOptions.normalScale}`);
-        console.log(`⏱️ Completed in ${elapsed}ms`);
-        console.log("%c[NormalMap] Success ✅", "color: green;");
-        if (plane && plane.material) {
-            plane.material.normalMap = useNormalMap ? currentNormalTexture : null;
-            plane.material.needsUpdate = true;
-        }
-        return currentNormalTexture;
-    } catch (error) {
-        console.error("%c[NormalMap] Failed ❌", "color: red; font-weight:bold", error);
-        showErrorMessage(`Failed to create normal map: ${error.message}`);
-        throw error;
-    } finally {
-        console.groupEnd();
-    }
-}
-
-// Apply albedo map
-async function applyAlbedoMap() {
-    console.groupCollapsed("%c[AlbedoMap] Applying new albedo map", "color: teal; font-weight:bold");
-    console.log("Options:", Object.assign({}, currentAlbedoOptions));
-
-    if (currentAlbedoTexture) {
-        console.log("Disposing previous albedo texture");
-        currentAlbedoTexture.dispose();
-    }
-
-    const start = performance.now();
-    try {
-        if (!imageUrl) throw new Error("No image URL provided");
-        currentAlbedoTexture = await ThreeJsAlbedoMapper.applyToMesh(plane, imageUrl, currentAlbedoOptions);
-        const elapsed = (performance.now() - start).toFixed(1);
-        if (!currentAlbedoTexture || !currentAlbedoTexture.image) throw new Error("Failed to create albedo texture");
-        const w = currentAlbedoTexture.image.width, h = currentAlbedoTexture.image.height;
-        console.log(`Albedo texture size: ${w}×${h}`);
-        console.log(`⏱️ Completed in ${elapsed}ms`);
-        console.log("%c[AlbedoMap] Success ✅", "color: green;");
-        return currentAlbedoTexture;
-    } catch (error) {
-        console.error("%c[AlbedoMap] Failed ❌", "color: red; font-weight:bold", error);
-        showErrorMessage(`Failed to create albedo map: ${error.message}`);
-        throw error;
-    } finally {
-        console.groupEnd();
-    }
-}
-
-// Combined applyMaps
-async function applyMaps() {
-    if (processingInProgress) { pendingUpdate = true; return; }
-    processingInProgress = true;
-    showLoadingIndicator(true);
-
-    try {
-        const bumpTexture = await applyBumpMap();
-        if (useNormalMap) {
-            await applyNormalMap(bumpTexture);
-        } else if (plane && plane.material) {
-            plane.material.normalMap = null;
-            plane.material.needsUpdate = true;
-        }
-        if (useAlbedoMap) {
-            await applyAlbedoMap();
-        } else if (plane && plane.material) {
-            if (plane.material.map) {
-                plane.material.map.dispose();
-            }
-            plane.material.map = null;
-            plane.material.needsUpdate = true;
-        }
-    } catch (error) {
-        console.error("Error applying maps:", error);
-    } finally {
-        processingInProgress = false;
-        showLoadingIndicator(false);
-        if (pendingUpdate) {
-            pendingUpdate = false;
-            setTimeout(applyMaps, 50);
-        }
-    }
-}
-
-const debouncedApplyMaps = debounce(applyMaps, 300);
-
-// Set up UI controls
-function setupControls() {
-    // Bump controls
-    const sigma1Slider       = document.getElementById('sigma1');
-    const sigma2Slider       = document.getElementById('sigma2');
-    const heightScaleSlider  = document.getElementById('heightScale');
-    const bumpScaleSlider    = document.getElementById('bumpScale');
-    const thresholdSlider    = document.getElementById('threshold');
-
-    // Normal controls
-    const strengthSlider     = document.getElementById('strength');
-    const normalScaleSlider  = document.getElementById('normalScale');
-    const useNormalMapCheckbox = document.getElementById('useNormalMap');
-
-    // Albedo controls
-    const brightnessSlider   = document.getElementById('brightness');
-    const contrastSlider     = document.getElementById('contrast');
-    const saturationSlider   = document.getElementById('saturation');
-    const useAlbedoMapCheckbox = document.getElementById('useAlbedoMap');
-
-    // Value displays
-    const sigma1Value        = document.getElementById('sigma1Value');
-    const sigma2Value        = document.getElementById('sigma2Value');
-    const heightScaleValue   = document.getElementById('heightScaleValue');
-    const bumpScaleValue     = document.getElementById('bumpScaleValue');
-    const thresholdValue     = document.getElementById('thresholdValue');
-    const strengthValue      = document.getElementById('strengthValue');
-    const normalScaleValue   = document.getElementById('normalScaleValue');
-    const brightnessValue    = document.getElementById('brightnessValue');
-    const contrastValue      = document.getElementById('contrastValue');
-    const saturationValue    = document.getElementById('saturationValue');
-
-    function safeSetSliderValue(slider, valueDisplay, value) {
-        if (slider && valueDisplay) {
-            const v = parseFloat(value) || 0;
-            slider.value = v;
-            valueDisplay.textContent = v;
-        }
-    }
-
-    safeSetSliderValue(sigma1Slider, sigma1Value, currentBumpOptions.sigma1);
-    safeSetSliderValue(sigma2Slider, sigma2Value, currentBumpOptions.sigma2);
-    safeSetSliderValue(heightScaleSlider, heightScaleValue, currentBumpOptions.heightScale);
-    safeSetSliderValue(bumpScaleSlider, bumpScaleValue, currentBumpOptions.bumpScale);
-    safeSetSliderValue(thresholdSlider, thresholdValue, currentBumpOptions.threshold);
-    safeSetSliderValue(strengthSlider, strengthValue, currentNormalOptions.strength);
-    safeSetSliderValue(normalScaleSlider, normalScaleValue, currentNormalOptions.normalScale);
-
-    safeSetSliderValue(brightnessSlider, brightnessValue, currentAlbedoOptions.brightness);
-    safeSetSliderValue(contrastSlider, contrastValue, currentAlbedoOptions.contrast);
-    safeSetSliderValue(saturationSlider, saturationValue, currentAlbedoOptions.saturation);
-
-    if (useNormalMapCheckbox) useNormalMapCheckbox.checked = useNormalMap;
-    if (useAlbedoMapCheckbox)  useAlbedoMapCheckbox.checked  = useAlbedoMap;
-
-    function createSliderListener(slider, valueDisplay, optionsObj, key, immediate = false) {
-        if (!slider || !valueDisplay) return;
-        slider.addEventListener('input', () => {
-            const v = parseFloat(slider.value) || 0;
-            valueDisplay.textContent = v;
-            optionsObj[key] = v;
-            if (immediate && key === 'normalScale' && plane?.material?.normalMap) {
-                plane.material.normalScale.set(v, v);
+    
+    // Initialize UI with callbacks
+    userInterface = new UserInterface(stateManager, {
+        applyMaps: applyMaps,
+        debouncedApplyMaps: debouncedApplyMaps,
+        updateNormalScale: (scale) => {
+            if (plane?.material?.normalMap) {
+                plane.material.normalScale.set(scale, scale);
                 plane.material.needsUpdate = true;
             }
-        });
-        slider.addEventListener('change', () => {
-            if (!immediate) debouncedApplyMaps();
-        });
-    }
-
-    // Bump listeners
-    createSliderListener(sigma1Slider, sigma1Value, currentBumpOptions, 'sigma1');
-    createSliderListener(sigma2Slider, sigma2Value, currentBumpOptions, 'sigma2');
-    createSliderListener(heightScaleSlider, heightScaleValue, currentBumpOptions, 'heightScale');
-    createSliderListener(bumpScaleSlider, bumpScaleValue, currentBumpOptions, 'bumpScale');
-    createSliderListener(thresholdSlider, thresholdValue, currentBumpOptions, 'threshold');
-
-    // Normal listeners
-    createSliderListener(strengthSlider, strengthValue, currentNormalOptions, 'strength');
-    createSliderListener(normalScaleSlider, normalScaleValue, currentNormalOptions, 'normalScale', true);
-
-    // Albedo listeners
-    createSliderListener(brightnessSlider, brightnessValue, currentAlbedoOptions, 'brightness');
-    createSliderListener(contrastSlider, contrastValue, currentAlbedoOptions, 'contrast');
-    createSliderListener(saturationSlider, saturationValue, currentAlbedoOptions, 'saturation');
-
-    if (useNormalMapCheckbox) {
-        useNormalMapCheckbox.addEventListener('change', () => {
-            useNormalMap = useNormalMapCheckbox.checked;
+        },
+        updateEmissiveIntensity: (intensity) => {
+            if (plane?.material?.emissiveMap) {
+                plane.material.emissiveIntensity = intensity;
+                plane.material.needsUpdate = true;
+            }
+        },
+        updateEmissiveColor: (color) => {
+            if (plane?.material?.emissiveMap) {
+                plane.material.emissive.set(color);
+                plane.material.needsUpdate = true;
+            }
+        },
+        toggleNormalMap: (enabled) => {
             if (plane?.material) {
-                plane.material.normalMap = useNormalMap ? currentNormalTexture : null;
+                const state = stateManager.getState();
+                plane.material.normalMap = enabled ? state.textures.normalTexture : null;
                 plane.material.needsUpdate = true;
             }
-        });
-    }
-    if (useAlbedoMapCheckbox) {
-        useAlbedoMapCheckbox.addEventListener('change', () => {
-            useAlbedoMap = useAlbedoMapCheckbox.checked;
+        },
+        toggleAlbedoMap: (enabled) => {
             if (plane?.material) {
-                plane.material.map = useAlbedoMap ? currentAlbedoTexture : null;
+                const state = stateManager.getState();
+                plane.material.map = enabled ? state.textures.albedoTexture : null;
                 plane.material.needsUpdate = true;
             }
-        });
-    }
-
-    const applyButton = document.getElementById('applyChanges');
-    if (applyButton) applyButton.addEventListener('click', applyMaps);
-
-    const fileInput = document.getElementById('imageFile');
-    if (fileInput) fileInput.addEventListener('change', handleFileSelect);
-
-    document.addEventListener('keydown', (event) => {
-        if (event.ctrlKey && event.key === 'Enter') {
-            applyMaps(); event.preventDefault();
+        },
+        toggleEmissionMap: (enabled) => {
+            if (plane?.material) {
+                const state = stateManager.getState();
+                plane.material.emissiveMap = enabled ? state.textures.emissionTexture : null;
+                plane.material.emissive.set(enabled ? new THREE.Color(state.emissionOptions.color) : new THREE.Color(0x000000));
+                plane.material.emissiveIntensity = enabled ? state.emissionOptions.intensity : 0;
+                plane.material.needsUpdate = true;
+            }
         }
     });
+    
+    // Subscribe to state changes
+    stateManager.subscribe((changes, state) => {
+        // Auto-save state changes
+        stateManager.saveToLocalStorage();
+    });
+
+    userInterface.showLoadingIndicator(true);
+    setTimeout(() => {
+        applyMaps().finally(() => userInterface.showLoadingIndicator(false));
+    }, 100);
+    
+    // Initialize clock for animations
+    clock = new THREE.Clock();
+
+    animate();
 }
 
 // Window resize handler
@@ -414,27 +407,40 @@ const debouncedResize = debounce(() => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 }, 200);
-function onWindowResize() { debouncedResize(); }
+
+function onWindowResize() { 
+    debouncedResize(); 
+}
 
 // Cleanup
 function cleanupResources() {
-    if (currentBumpTexture)   currentBumpTexture.dispose();
-    if (currentNormalTexture) currentNormalTexture.dispose();
-    if (currentAlbedoTexture) currentAlbedoTexture.dispose();
+    const state = stateManager.getState();
+    
+    // Clean up textures
+    if (state.textures.bumpTexture) state.textures.bumpTexture.dispose();
+    if (state.textures.normalTexture) state.textures.normalTexture.dispose();
+    if (state.textures.albedoTexture) state.textures.albedoTexture.dispose();
+    if (state.textures.emissionTexture) state.textures.emissionTexture.dispose();
+    
+    // Clean up image URL if it's a blob
+    const imageUrl = state.resources.imageUrl;
     if (typeof imageUrl === 'string' && imageUrl.startsWith('blob:')) {
         URL.revokeObjectURL(imageUrl);
     }
+    
+    // Clean up mesh
     if (plane) {
         if (plane.geometry) plane.geometry.dispose();
         if (plane.material) plane.material.dispose();
     }
+    
+    // Clean up renderer
     if (renderer) renderer.dispose();
 }
+
 window.addEventListener('beforeunload', cleanupResources);
 
 // Animation loop
-const clock = new THREE.Clock();
-let frameCount = 0;
 function animate() {
     requestAnimationFrame(animate);
     frameCount++;
