@@ -6,6 +6,7 @@ export class UserInterface {
         this.callbacks = callbacks || {};
         this.setupControls();
         this.updateImagePreview();
+        this.setupDownloadButtons(); // Add this line
     }
 
     // File input handler
@@ -28,7 +29,10 @@ export class UserInterface {
         
         // Update state with new image URL
         this.stateManager.updateState({
-            resources: { imageUrl: newImageUrl }
+            resources: { 
+                imageUrl: newImageUrl,
+                originalFileName: file.name
+            }
         });
         
         this.updateImagePreview();
@@ -79,6 +83,118 @@ export class UserInterface {
     showErrorMessage(message) {
         console.error(message);
         // Implement error display if needed
+    }
+
+    // NEW METHOD: Set up download buttons
+    setupDownloadButtons() {
+        const downloadButtons = {
+            'download-bump': 'bumpTexture',
+            'download-normal': 'normalTexture',
+            'download-albedo': 'albedoTexture',
+            'download-emission': 'emissionTexture'
+        };
+
+        // Add event listeners to each download button
+        Object.entries(downloadButtons).forEach(([buttonId, textureKey]) => {
+            const button = document.getElementById(buttonId);
+            if (button) {
+                button.addEventListener('click', () => {
+                    this.downloadTexture(textureKey);
+                });
+            }
+        });
+    }
+
+    // NEW METHOD: Download texture as image
+    downloadTexture(textureKey) {
+        const textures = this.stateManager.getState('textures');
+        const texture = textures[textureKey];
+        
+        if (!texture) {
+            this.showErrorMessage(`No ${textureKey.replace('Texture', '')} available for download`);
+            return;
+        }
+
+        // Get original filename as base for download
+        const originalFileName = this.stateManager.getState('resources').originalFileName || 'texture';
+        const baseName = originalFileName.split('.')[0];
+        
+        // Determine map type suffix
+        const mapType = textureKey.replace('Texture', '');
+        const fileName = `${baseName}_${mapType}.png`;
+
+        try {
+            this.showLoadingIndicator(true);
+            this.textureToImage(texture, fileName);
+        } catch (error) {
+            console.error(`Error downloading ${mapType} map:`, error);
+            this.showErrorMessage(`Failed to download ${mapType} map: ${error.message}`);
+        } finally {
+            this.showLoadingIndicator(false);
+        }
+    }
+
+    // NEW METHOD: Convert Three.js texture to downloadable image
+    textureToImage(texture, fileName) {
+        // Create a canvas element to draw the texture
+        const canvas = document.createElement('canvas');
+        const renderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            antialias: true,
+            preserveDrawingBuffer: true
+        });
+        
+        // Set canvas size to match texture
+        const width = texture.image ? texture.image.width : 1024;
+        const height = texture.image ? texture.image.height : 1024;
+        renderer.setSize(width, height);
+        
+        // Create a simple scene with a plane and the texture
+        const scene = new THREE.Scene();
+        const camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
+        camera.position.z = 1;
+        
+        let material;
+        
+        // Handle different texture types
+        if (texture.isDataTexture) {
+            // For data textures, use RawShaderMaterial to display raw data
+            material = new THREE.MeshBasicMaterial({ map: texture });
+        } else {
+            // For regular textures
+            material = new THREE.MeshBasicMaterial({ map: texture });
+        }
+        
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1),
+            material
+        );
+        scene.add(plane);
+        
+        // Render the scene
+        renderer.render(scene, camera);
+        
+        // Convert canvas to data URL and trigger download
+        try {
+            const dataURL = canvas.toDataURL('image/png');
+            
+            // Create download link
+            const link = document.createElement('a');
+            link.href = dataURL;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            console.log(`Downloaded ${fileName}`);
+        } catch (error) {
+            console.error('Error creating download:', error);
+            throw new Error('Failed to create downloadable image');
+        } finally {
+            // Cleanup
+            renderer.dispose();
+            material.dispose();
+        }
     }
 
     // Set up UI controls
