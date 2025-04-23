@@ -29,6 +29,11 @@ export class StateManager {
                 intensity: 1.0,
                 ...initialState.emissionOptions
             },
+            // new visualization state
+            visualization: {
+                activeMap: 'material',  // Options: 'material', 'bump', 'normal', 'albedo', 'emission'
+                ...initialState.visualization
+            },            
             flags: {
                 useNormalMap: true,
                 useAlbedoMap: true,
@@ -138,6 +143,10 @@ export class StateManager {
                 color: 0xaaaaaa,
                 intensity: 1.0
             },
+            // Add visualization to default state
+            visualization: {
+                activeMap: 'material'  // Default to material view
+            },            
             flags: {
                 useNormalMap: true,
                 useAlbedoMap: true,

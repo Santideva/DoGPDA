@@ -256,6 +256,10 @@ async function applyMaps() {
             plane.material.emissiveIntensity = 0;
             plane.material.needsUpdate = true;
         }
+        
+        // Reapply the current visualization mode
+        const visMode = state.visualization.activeMap;
+        setVisualizationMode(visMode);
     } catch (error) {
         console.error("Error applying maps:", error);
     } finally {
@@ -277,6 +281,112 @@ async function applyMaps() {
 }
 
 const debouncedApplyMaps = debounce(applyMaps, 300);
+
+// Switching visualization mode
+function setVisualizationMode(mode) {
+    console.log(`Switching visualization mode to: ${mode}`);
+    
+    // Save current material settings to restore later
+    const currentMaterial = plane.material;
+    const savedSettings = {
+        normalMap: currentMaterial.normalMap,
+        map: currentMaterial.map,
+        emissiveMap: currentMaterial.emissiveMap,
+        emissive: currentMaterial.emissive.clone(),
+        emissiveIntensity: currentMaterial.emissiveIntensity,
+        normalScale: currentMaterial.normalScale.clone()
+    };
+    
+    // Get textures from state
+    const state = stateManager.getState();
+    const textures = state.textures;
+    
+    // Reset material to default view
+    if (mode === 'material') {
+        // Apply saved settings
+        currentMaterial.normalMap = state.flags.useNormalMap ? textures.normalTexture : null;
+        currentMaterial.map = state.flags.useAlbedoMap ? textures.albedoTexture : null;
+        currentMaterial.emissiveMap = state.flags.useEmissionMap ? textures.emissionTexture : null;
+        currentMaterial.emissive.copy(savedSettings.emissive);
+        currentMaterial.emissiveIntensity = savedSettings.emissiveIntensity;
+        currentMaterial.normalScale.copy(savedSettings.normalScale);
+    } 
+    // Show only the bumped surface with grayscale
+    else if (mode === 'bump') {
+        // Create a basic material that shows just the bump texture
+        if (textures.bumpTexture) {
+            currentMaterial.normalMap = null;
+            currentMaterial.map = textures.bumpTexture; // Use bump as albedo to view it
+            currentMaterial.emissiveMap = null;
+            currentMaterial.emissive.set(0x000000);
+            currentMaterial.emissiveIntensity = 0;
+        }
+    }
+    // Show only the normal map
+    else if (mode === 'normal') {
+        if (textures.normalTexture) {
+            currentMaterial.normalMap = null;
+            currentMaterial.map = textures.normalTexture; // Use normal as albedo to view it
+            currentMaterial.emissiveMap = null; 
+            currentMaterial.emissive.set(0x000000);
+            currentMaterial.emissiveIntensity = 0;
+        }
+    }
+    // Show only the albedo map
+    else if (mode === 'albedo') {
+        if (textures.albedoTexture) {
+            currentMaterial.normalMap = null;
+            currentMaterial.map = textures.albedoTexture;
+            currentMaterial.emissiveMap = null;
+            currentMaterial.emissive.set(0x000000);
+            currentMaterial.emissiveIntensity = 0;
+        }
+    }
+    // Show only the emission map
+    else if (mode === 'emission') {
+        if (textures.emissionTexture) {
+            currentMaterial.normalMap = null;
+            currentMaterial.map = null;
+            currentMaterial.emissiveMap = textures.emissionTexture;
+            currentMaterial.emissive.set(0xffffff); // Full white for emission viewing
+            currentMaterial.emissiveIntensity = 1.0;
+        }
+    }
+    
+    currentMaterial.needsUpdate = true;
+    
+    // Update control panel visibility
+    updateControlVisibility(mode);
+}
+
+// Handle control panel visibility
+function updateControlVisibility(mode) {
+    // Map of control panels by visualization mode
+    const panelIdMap = {
+        'material': null, // No specific panel for material view
+        'bump': 'controls',
+        'normal': 'normal-controls',
+        'albedo': 'albedo-controls',
+        'emission': 'emission-controls'
+    };
+    
+    // Get all map panels
+    const mapPanels = document.querySelectorAll('.map-panel');
+    
+    // Hide all panels first
+    mapPanels.forEach(panel => {
+        panel.classList.remove('active');
+    });
+    
+    // Show only the selected panel
+    const activePanelId = panelIdMap[mode];
+    if (activePanelId) {
+        const activePanel = document.getElementById(activePanelId);
+        if (activePanel) {
+            activePanel.classList.add('active');
+        }
+    }
+}
 
 // Initialize the scene
 function init() {
@@ -380,7 +490,9 @@ function init() {
                 plane.material.emissiveIntensity = enabled ? state.emissionOptions.intensity : 0;
                 plane.material.needsUpdate = true;
             }
-        }
+        },
+        // Add new callback for visualization mode
+        setVisualizationMode: setVisualizationMode
     });
     
     // Subscribe to state changes

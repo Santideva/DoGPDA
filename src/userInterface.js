@@ -5,8 +5,82 @@ export class UserInterface {
         this.stateManager = stateManager;
         this.callbacks = callbacks || {};
         this.setupControls();
+        this.setupMapSelection(); // Add this line
         this.updateImagePreview();
-        this.setupDownloadButtons(); // Add this line
+        this.setupDownloadButtons();
+    }
+
+    // Add new method for map selection
+    setupMapSelection() {
+        const mapRadios = document.querySelectorAll('input[name="mapView"]');
+        
+        if (mapRadios.length > 0) {
+            // Set initial state
+            const currentState = this.stateManager.getState();
+            const initialView = currentState.visualization?.activeMap || 'material';
+            
+            // Find and select the radio button that matches the current state
+            for (const radio of mapRadios) {
+                if (radio.value === initialView) {
+                    radio.checked = true;
+                    break;
+                }
+            }
+            
+            // Add event listeners
+            mapRadios.forEach(radio => {
+                radio.addEventListener('change', () => {
+                    if (radio.checked) {
+                        this.stateManager.updateState({
+                            visualization: { activeMap: radio.value }
+                        });
+                        
+                        if (this.callbacks.setVisualizationMode) {
+                            this.callbacks.setVisualizationMode(radio.value);
+                        }
+                        
+                        // Update control panel visibility
+                        this.updateControlPanelVisibility(radio.value);
+                    }
+                });
+            });
+        }
+    }
+    
+    // Add a method to handle control panel visibility
+    updateControlPanelVisibility(mode) {
+        // Map of control panels by visualization mode
+        const panels = {
+            'material': ['normal-controls', 'albedo-controls', 'emission-controls'],
+            'bump': ['controls'],
+            'normal': ['normal-controls'],
+            'albedo': ['albedo-controls'],
+            'emission': ['emission-controls']
+        };
+        
+        // Hide all control panels first
+        const allPanels = [
+            'controls', 
+            'normal-controls', 
+            'albedo-controls', 
+            'emission-controls'
+        ];
+        
+        allPanels.forEach(panelId => {
+            const panel = document.getElementById(panelId);
+            if (panel) {
+                panel.classList.add('inactive');
+            }
+        });
+        
+        // Show only the relevant panels for the selected mode
+        const visiblePanels = panels[mode] || [];
+        visiblePanels.forEach(panelId => {
+            const panel = document.getElementById(panelId);
+            if (panel) {
+                panel.classList.remove('inactive');
+            }
+        });
     }
 
     // File input handler
@@ -85,7 +159,7 @@ export class UserInterface {
         // Implement error display if needed
     }
 
-    // NEW METHOD: Set up download buttons
+    // Set up download buttons
     setupDownloadButtons() {
         const downloadButtons = {
             'download-bump': 'bumpTexture',
@@ -105,7 +179,7 @@ export class UserInterface {
         });
     }
 
-    // NEW METHOD: Download texture as image
+    // Download texture as image
     downloadTexture(textureKey) {
         const textures = this.stateManager.getState('textures');
         const texture = textures[textureKey];
@@ -134,7 +208,7 @@ export class UserInterface {
         }
     }
 
-    // NEW METHOD: Convert Three.js texture to downloadable image
+    // Convert Three.js texture to downloadable image
     textureToImage(texture, fileName) {
         // Create a canvas element to draw the texture
         const canvas = document.createElement('canvas');
@@ -392,5 +466,9 @@ export class UserInterface {
                 event.preventDefault();
             }
         });
+
+        // Initialize control panel visibility based on current visualization mode
+        const currentView = state.visualization?.activeMap || 'material';
+        this.updateControlPanelVisibility(currentView);
     }
 }
