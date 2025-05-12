@@ -198,83 +198,105 @@ async function applyEmissionMap() {
     }
 }
 
+
+/**
+ * Switches the mesh material to show only the requested mapType.
+ * Must sit before applyMaps so it’s in scope.
+ */
+function setVisualizationMode(mode) {
+    const mat = plane.material;
+    const tex = stateManager.getState().textures;
+  
+    // Clear all channels
+    mat.normalMap    = null;
+    mat.map          = null;
+    mat.emissiveMap  = null;
+    mat.emissive.set(0x000000);
+    mat.emissiveIntensity = 0;
+  
+    // Activate only the chosen one:
+    if (mode === 'bump' && tex.bumpTexture) {
+      mat.map = tex.bumpTexture;
+    } else if (mode === 'normal' && tex.normalTexture) {
+      mat.map = tex.normalTexture;
+    } else if (mode === 'albedo' && tex.albedoTexture) {
+      mat.map = tex.albedoTexture;
+    } else if (mode === 'emission' && tex.emissionTexture) {
+      mat.emissiveMap = tex.emissionTexture;
+      mat.emissive.set(0xffffff);
+      mat.emissiveIntensity = 1.0;
+    }
+  
+    mat.needsUpdate = true;
+  }
+  
+
 // Combined applyMaps
-async function applyMaps() {
+/**
+ * @param {'bump'|'normal'|'albedo'|'emission'} mapType
+ */
+async function applyMaps(mapType = 'bump') {
+    console.trace('[applyMaps] entry', mapType, stateManager.getState().flags);
     const state = stateManager.getState();
     
-    // Check if processing is already in progress
+    // guard re-entrancy as before…
     if (state.flags.processingInProgress) {
-        stateManager.updateState({
-            flags: { pendingUpdate: true }
-        });
-        return;
+      stateManager.updateState({ flags:{ pendingUpdate:true } });
+      return;
     }
-    
-    stateManager.updateState({
-        flags: { processingInProgress: true }
-    });
+    stateManager.updateState({ flags:{ processingInProgress:true } });
     userInterface.showLoadingIndicator(true);
-
+  
     try {
-        const bumpTexture = await applyBumpMap();
-        
-        if (state.flags.useNormalMap) {
-            await applyNormalMap(bumpTexture);
-        } else if (plane && plane.material) {
-            plane.material.normalMap = null;
-            plane.material.needsUpdate = true;
-        }
-        
-        if (state.flags.useAlbedoMap) {
-            const albedoTexture = await applyAlbedoMap();
-            if (plane && plane.material) {
-                plane.material.map = albedoTexture;
-                plane.material.needsUpdate = true;
-            }
-        } else if (plane && plane.material) {
-            if (plane.material.map) {
-                plane.material.map.dispose();
-            }
-            plane.material.map = null;
-            plane.material.needsUpdate = true;
-        }
-        
-        if (state.flags.useEmissionMap) {
-            const emissionTexture = await applyEmissionMap();
-            if (plane && plane.material) {
-                plane.material.emissiveMap = emissionTexture;
-                plane.material.emissive.set(new THREE.Color(state.emissionOptions.color));
-                plane.material.emissiveIntensity = state.emissionOptions.intensity;
-                plane.material.needsUpdate = true;
-            }
-        } else if (plane && plane.material) {
-            if (plane.material.emissiveMap) {
-                plane.material.emissiveMap.dispose();
-            }
-            plane.material.emissiveMap = null;
-            plane.material.emissive.set(0x000000);
-            plane.material.emissiveIntensity = 0;
-            plane.material.needsUpdate = true;
-        }
+      let bumpTexture, normalTexture, albedoTexture, emissionTexture;
+  
+      switch (mapType) {
+        case 'bump':
+          bumpTexture = await applyBumpMap();
+          break;
+  
+        case 'normal':
+          bumpTexture = await applyBumpMap();
+          normalTexture = await applyNormalMap(bumpTexture);
+          break;
+  
+        case 'albedo':
+          albedoTexture = await applyAlbedoMap();
+          break;
+  
+        case 'emission':
+          emissionTexture = await applyEmissionMap();
+          break;
+  
+        default:
+          console.warn(`Unknown mapType: ${mapType}`);
+          bumpTexture = await applyBumpMap();
+      }
+  
+      // Finally, show only the selected map
+      setVisualizationMode(mapType);
+
+        // Tell the UI to re-inspect state.textures and update its Download button
+        userInterface.updateDownloadButton(mapType);      
+  
     } catch (error) {
-        console.error("Error applying maps:", error);
+      console.error("Error in applyMaps:", error);
     } finally {
-        const updatedState = stateManager.getState();
-        stateManager.updateState({
-            flags: { 
-                processingInProgress: false 
-            }
-        });
-        userInterface.showLoadingIndicator(false);
-        
-        if (updatedState.flags.pendingUpdate) {
-            stateManager.updateState({
-                flags: { pendingUpdate: false }
-            });
-            setTimeout(applyMaps, 50);
-        }
+      // reset flags & spinner as before…
+      stateManager.updateState({ flags:{ processingInProgress:false } });
+      userInterface.showLoadingIndicator(false);
+
+        // Even if we run into an error, download should reflect the current state
+        const currentType = mapType;
+        userInterface.updateDownloadButton(currentType);
+
+      if (stateManager.getState().flags.pendingUpdate) {
+        stateManager.updateState({ flags:{ pendingUpdate:false } });
+        setTimeout(() => applyMaps(mapType), 50);
+      }
     }
-}
+  }
+  
 
 const debouncedApplyMaps = debounce(applyMaps, 300);
 
@@ -389,10 +411,18 @@ function init() {
         stateManager.saveToLocalStorage();
     });
 
+    // determine initial selection from the dropdown
+    const initialType = document.getElementById('mapType').value || 'bump';
     userInterface.showLoadingIndicator(true);
     setTimeout(() => {
-        applyMaps().finally(() => userInterface.showLoadingIndicator(false));
+      applyMaps(initialType)
+        .finally(() => {
+          // hide spinner _then_ enable/disable Download button
+          userInterface.showLoadingIndicator(false);
+          userInterface.updateDownloadButton(initialType);
+        });
     }, 100);
+
     
     // Initialize clock for animations
     clock = new THREE.Clock();

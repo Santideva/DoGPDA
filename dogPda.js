@@ -263,8 +263,13 @@ class ThreeJsDoGBumpMapper {
     // Process an image and create a Three.js texture
     createBumpTexture(imageUrl) {
         return new Promise((resolve, reject) => {
+            this._cleanupPreviews();
+
             const img = new Image();
-            img.crossOrigin = "Anonymous";
+            // only set crossOrigin for network URLs—blob URLs don’t need (and break) CORS
+            if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+                img.crossOrigin = 'Anonymous';
+              }         
 
             img.onload = () => {
                 // Create canvas and get image data
@@ -294,6 +299,7 @@ class ThreeJsDoGBumpMapper {
             };
 
             img.onerror = () => {
+                console.error(`[DoGBump] Failed to load image: ${imageUrl}`, error);                
                 reject(new Error('Failed to load image'));
             };
 

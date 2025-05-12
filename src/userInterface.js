@@ -1,396 +1,261 @@
 import * as THREE from 'three';
 
+// UserInterface manages the dynamic sidebar controls: map-type selection, parameter panels, file upload, apply/download actions.
 export class UserInterface {
-    constructor(stateManager, callbacks) {
-        this.stateManager = stateManager;
-        this.callbacks = callbacks || {};
-        this.setupControls();
-        this.updateImagePreview();
-        this.setupDownloadButtons(); // Add this line
+  constructor(stateManager, callbacks) {
+    this.stateManager = stateManager;
+    this.callbacks = callbacks || {};
+
+    // Initialize UI elements and bind handlers
+    this.setupControls();
+    this.updateImagePreview();
+  }
+
+  /**
+   * Helper: enable/disable and label the Download button based on current textures
+   * @param {string} type - one of 'bump','normal','albedo','emission'
+   */
+  updateDownloadButton(type) {
+    const btn = document.getElementById('download-current');
+    const hasTexture = !!this.stateManager.getState().textures[type + 'Texture'];
+    btn.disabled = !hasTexture;
+    btn.textContent = `Download ${type.charAt(0).toUpperCase() + type.slice(1)} Map`;
+  }  
+
+/**
+   * Handles image file selection: updates state and preview, then re-applies current map.
+   */
+handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+    
+    // Read file as Data URL instead of creating a blob URL
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = /** @type {string} */ (reader.result);
+      console.log("Loading image from file (data URL):", file.name);
+
+      // Update state with Data URL and original filename
+      this.stateManager.updateState({
+        resources: { imageUrl: dataUrl, originalFileName: file.name }
+      });
+
+      this.updateImagePreview();
+      // Trigger reprocessing with the current map type
+      const type = this.currentMapType;
+      if (this.callbacks.applyMaps) this.callbacks.applyMaps(type);
+    };
+    reader.onerror = (error) => {
+      console.error("Failed to read file as Data URL:", error);
+      this.showErrorMessage(`Failed to load image file: ${file.name}`);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  /**
+   * Updates the image preview thumbnail.
+   */
+  updateImagePreview() {
+    const preview = document.getElementById('image-preview');
+    const url = this.stateManager.getState().resources.imageUrl;
+    if (preview) preview.style.backgroundImage = url ? `url(${url})` : '';
+  }
+
+  /**
+   * Delegates to the callback for showing/hiding loading spinner.
+   */
+  showLoadingIndicator(show) {
+    if (this.callbacks.showLoadingIndicator) {
+      this.callbacks.showLoadingIndicator(show);
+    }
+  }
+
+  /**
+   * Delegates error display to callback or console.
+   */
+  showErrorMessage(msg) {
+    if (this.callbacks.showErrorMessage) {
+      this.callbacks.showErrorMessage(msg);
+    } else {
+      console.error(msg);
+    }
+  }
+
+  /**
+   * Downloads the currently selected map texture.
+   */
+  downloadCurrent() {
+    const key = this.currentMapType + 'Texture';
+    const tex = this.stateManager.getState().textures[key];
+    if (!tex) {
+      this.showErrorMessage(`No ${this.currentMapType} map available`);
+      return;
+    }
+    const orig = this.stateManager.getState().resources.originalFileName || 'texture';
+    const base = orig.split('.')[0];
+    const filename = `${base}_${this.currentMapType}.png`;
+    this.textureToImage(tex, filename);
+  }
+
+  /**
+   * Renders a texture to a hidden canvas and triggers a download.
+   */
+  textureToImage(texture, fileName) {
+    const canvas = document.createElement('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, preserveDrawingBuffer: true });
+    const w = texture.image?.width || 1024;
+    const h = texture.image?.height || 1024;
+    renderer.setSize(w, h);
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
+    camera.position.z = 1;
+    const material = new THREE.MeshBasicMaterial({ map: texture });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    scene.add(plane);
+    renderer.render(scene, camera);
+
+    const dataURL = canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.href = dataURL;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    renderer.dispose();
+    material.dispose();
+  }
+
+  /**
+   * Builds the parameter controls for the selected map type.
+   */
+  renderParameterPanel(type, container) {
+    this.currentMapType = type;
+    container.innerHTML = '';
+    const state = this.stateManager.getState();
+
+    // Helper to create label+input+value span
+    const makeControl = ({ label, id, min, max, step, value, checkbox, flagKey }) => {
+      const wrapper = document.createElement('div');
+      wrapper.classList.add('control');
+
+      const lbl = document.createElement('label');
+      lbl.htmlFor = id;
+      lbl.textContent = label;
+      wrapper.appendChild(lbl);
+
+      const input = document.createElement('input');
+      input.id = id;
+      if (checkbox) {
+        input.type = 'checkbox';
+        input.checked = value;
+      } else {
+        input.type = 'range';
+        Object.assign(input, { min, max, step, value });
+      }
+      wrapper.appendChild(input);
+
+      const span = document.createElement('span');
+      span.id = id + 'Value';
+      span.textContent = checkbox ? '' : value;
+      wrapper.appendChild(span);
+
+      return { wrapper, input, span };
+    };
+
+    // Map-type specific configs
+    let configs = [];
+    if (type === 'bump') {
+      configs = [
+        { label: 'σ₁',         id: 'sigma1',      min:'0.1', max:'10', step:'0.1', value: state.bumpOptions.sigma1 },
+        { label: 'σ₂',         id: 'sigma2',      min:'0.1', max:'10', step:'0.1', value: state.bumpOptions.sigma2 },
+        { label: 'Height',     id: 'heightScale', min:'0.1', max:'5',  step:'0.1', value: state.bumpOptions.heightScale },
+        { label: 'Bump',       id: 'bumpScale',   min:'0',   max:'1',  step:'0.01',value: state.bumpOptions.bumpScale },
+        { label: 'Threshold',  id: 'threshold',   min:'0',   max:'1',  step:'0.01',value: state.bumpOptions.threshold }
+      ];
+    } else if (type === 'normal') {
+      configs = [
+        { label: 'Strength',    id: 'strength',    min:'0.1', max:'5',  step:'0.1', value: state.normalOptions.strength },
+        { label: 'NormalScale', id: 'normalScale', min:'0',   max:'3',  step:'0.1', value: state.normalOptions.normalScale }
+      ];
+    } else if (type === 'albedo') {
+      configs = [
+        { label: 'Brightness',  id: 'brightness',  min:'0',   max:'2',  step:'0.1', value: state.albedoOptions.brightness },
+        { label: 'Contrast',    id: 'contrast',    min:'0',   max:'2',  step:'0.1', value: state.albedoOptions.contrast },
+        { label: 'Saturation',  id: 'saturation',  min:'0',   max:'2',  step:'0.1', value: state.albedoOptions.saturation }
+      ];
+    } else if (type === 'emission') {
+      configs = [
+        { label: 'Threshold',       id: 'emissionThreshold',min:'0',  max:'1',  step:'0.01',value: state.emissionOptions.threshold },
+        { label: 'Exponent',        id: 'emissionExponent', min:'0.1',max:'5',  step:'0.1', value: state.emissionOptions.exponent },
+        { label: 'Blur Radius',     id: 'emissionBlur',     min:'0',  max:'50', step:'1',    value: state.emissionOptions.blurRadius },
+        { label: 'Intensity',       id: 'emissionIntensity',min:'0',  max:'5',  step:'0.1', value: state.emissionOptions.intensity },
+        { label: 'Use Emission Map',id: 'useEmissionMap',  checkbox:true,    value: state.flags.useEmissionMap, flagKey: 'useEmissionMap' }
+      ];
     }
 
-    // File input handler
-    handleFileSelect(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-        if (!file.type.startsWith('image/')) {
-            alert('Please select an image file');
-            return;
-        }
-        
-        const newImageUrl = URL.createObjectURL(file);
-        console.log("Loading image from file:", file.name);
-        
-        // Revoke old blob URL if it exists
-        const currentImageUrl = this.stateManager.getState('resources').imageUrl;
-        if (typeof currentImageUrl === 'string' && currentImageUrl.startsWith('blob:')) {
-            URL.revokeObjectURL(currentImageUrl);
-        }
-        
-        // Update state with new image URL
-        this.stateManager.updateState({
-            resources: { 
-                imageUrl: newImageUrl,
-                originalFileName: file.name
-            }
+    // Insert controls and wire up events
+    configs.forEach(cfg => {
+      const { wrapper, input, span } = makeControl(cfg);
+      container.appendChild(wrapper);
+
+      if (input.type === 'range') {
+        input.addEventListener('input', () => {
+          span.textContent = input.value;
+          this.stateManager.updateState({ [`${type}Options`]: { [cfg.id]: parseFloat(input.value) } });
         });
-        
-        this.updateImagePreview();
-        if (this.callbacks.applyMaps) this.callbacks.applyMaps();
-    }
-
-    // Update preview div
-    updateImagePreview() {
-        const preview = document.getElementById('image-preview');
-        const imageUrl = this.stateManager.getState('resources').imageUrl;
-        
-        if (preview && imageUrl) {
-            preview.style.backgroundImage = `url(${imageUrl})`;
-            preview.style.height = '100px';
-            preview.style.backgroundSize = 'contain';
-            preview.style.backgroundRepeat = 'no-repeat';
-            preview.style.backgroundPosition = 'center';
-            preview.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-            preview.style.border = '1px solid rgba(255, 255, 255, 0.3)';
-            preview.style.marginTop = '10px';
-        }
-    }
-
-    // Loading indicator
-    showLoadingIndicator(show) {
-        const loadingElement = document.getElementById('loading-indicator');
-        if (!loadingElement) {
-            if (show) {
-                const loader = document.createElement('div');
-                loader.id = 'loading-indicator';
-                loader.style.position = 'fixed';
-                loader.style.top = '10px';
-                loader.style.right = '10px';
-                loader.style.background = 'rgba(0,0,0,0.7)';
-                loader.style.color = 'white';
-                loader.style.padding = '8px 15px';
-                loader.style.borderRadius = '4px';
-                loader.style.zIndex = '1000';
-                loader.textContent = 'Processing...';
-                document.body.appendChild(loader);
-            }
-        } else {
-            loadingElement.style.display = show ? 'block' : 'none';
-        }
-    }
-
-    // Show error message
-    showErrorMessage(message) {
-        console.error(message);
-        // Implement error display if needed
-    }
-
-    // NEW METHOD: Set up download buttons
-    setupDownloadButtons() {
-        const downloadButtons = {
-            'download-bump': 'bumpTexture',
-            'download-normal': 'normalTexture',
-            'download-albedo': 'albedoTexture',
-            'download-emission': 'emissionTexture'
-        };
-
-        // Add event listeners to each download button
-        Object.entries(downloadButtons).forEach(([buttonId, textureKey]) => {
-            const button = document.getElementById(buttonId);
-            if (button) {
-                button.addEventListener('click', () => {
-                    this.downloadTexture(textureKey);
-                });
-            }
+        input.addEventListener('change', () => this.callbacks.debouncedApplyMaps && this.callbacks.debouncedApplyMaps(mapType));
+      }
+      if (input.type === 'checkbox') {
+        input.addEventListener('change', () => {
+          this.stateManager.updateState({ flags: { [cfg.flagKey]: input.checked } });
+          this.callbacks.toggleEmissionMap && this.callbacks.toggleEmissionMap(input.checked);
         });
-    }
+      }
+    });
+  }
 
-    // NEW METHOD: Download texture as image
-    downloadTexture(textureKey) {
-        const textures = this.stateManager.getState('textures');
-        const texture = textures[textureKey];
-        
-        if (!texture) {
-            this.showErrorMessage(`No ${textureKey.replace('Texture', '')} available for download`);
-            return;
-        }
+  /**
+   * Sets up top-level UI bindings: map-type selector, apply/download buttons, file input.
+   */
+  setupControls() {
+    const mapType = document.getElementById('mapType');
+    const panel = document.getElementById('parameter-panel');
+    const fileInput = document.getElementById('imageFile');
+    const applyBtn = document.getElementById('applyChanges');
+    const downloadBtn = document.getElementById('download-current');
 
-        // Get original filename as base for download
-        const originalFileName = this.stateManager.getState('resources').originalFileName || 'texture';
-        const baseName = originalFileName.split('.')[0];
-        
-        // Determine map type suffix
-        const mapType = textureKey.replace('Texture', '');
-        const fileName = `${baseName}_${mapType}.png`;
+    // When user selects map type, rebuild controls & update download button
+    mapType.addEventListener('change', () => {
+        const type = mapType.value;
+        this.renderParameterPanel(type, panel);
+        downloadBtn.textContent = `Download ${type.charAt(0).toUpperCase() + type.slice(1)}
+ Map`;
+        downloadBtn.disabled   = !this.stateManager.getState().textures[type + 'Texture'];
+        // If you want to re‐run on change:
+        // this.callbacks.applyMaps(type);
+      });
+      
 
-        try {
-            this.showLoadingIndicator(true);
-            this.textureToImage(texture, fileName);
-        } catch (error) {
-            console.error(`Error downloading ${mapType} map:`, error);
-            this.showErrorMessage(`Failed to download ${mapType} map: ${error.message}`);
-        } finally {
-            this.showLoadingIndicator(false);
-        }
-    }
+    // Apply triggers map-specific processing
+    applyBtn.addEventListener('click', () => {
+        const type = mapType.value;        // <-- extract the string
+        this.callbacks.applyMaps(type);
+      });
+      
 
-    // NEW METHOD: Convert Three.js texture to downloadable image
-    textureToImage(texture, fileName) {
-        // Create a canvas element to draw the texture
-        const canvas = document.createElement('canvas');
-        const renderer = new THREE.WebGLRenderer({
-            canvas: canvas,
-            antialias: true,
-            preserveDrawingBuffer: true
-        });
-        
-        // Set canvas size to match texture
-        const width = texture.image ? texture.image.width : 1024;
-        const height = texture.image ? texture.image.height : 1024;
-        renderer.setSize(width, height);
-        
-        // Create a simple scene with a plane and the texture
-        const scene = new THREE.Scene();
-        const camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
-        camera.position.z = 1;
-        
-        let material;
-        
-        // Handle different texture types
-        if (texture.isDataTexture) {
-            // For data textures, use RawShaderMaterial to display raw data
-            material = new THREE.MeshBasicMaterial({ map: texture });
-        } else {
-            // For regular textures
-            material = new THREE.MeshBasicMaterial({ map: texture });
-        }
-        
-        const plane = new THREE.Mesh(
-            new THREE.PlaneGeometry(1, 1),
-            material
-        );
-        scene.add(plane);
-        
-        // Render the scene
-        renderer.render(scene, camera);
-        
-        // Convert canvas to data URL and trigger download
-        try {
-            const dataURL = canvas.toDataURL('image/png');
-            
-            // Create download link
-            const link = document.createElement('a');
-            link.href = dataURL;
-            link.download = fileName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            console.log(`Downloaded ${fileName}`);
-        } catch (error) {
-            console.error('Error creating download:', error);
-            throw new Error('Failed to create downloadable image');
-        } finally {
-            // Cleanup
-            renderer.dispose();
-            material.dispose();
-        }
-    }
+    // Download invokes our downloadCurrent method
+    downloadBtn.addEventListener('click', () => this.downloadCurrent());
 
-    // Set up UI controls
-    setupControls() {
-        const state = this.stateManager.getState();
-        
-        // Bump controls
-        const sigma1Slider       = document.getElementById('sigma1');
-        const sigma2Slider       = document.getElementById('sigma2');
-        const heightScaleSlider  = document.getElementById('heightScale');
-        const bumpScaleSlider    = document.getElementById('bumpScale');
-        const thresholdSlider    = document.getElementById('threshold');
+    // File input binding
+    fileInput.addEventListener('change', this.handleFileSelect.bind(this));
 
-        // Normal controls
-        const strengthSlider     = document.getElementById('strength');
-        const normalScaleSlider  = document.getElementById('normalScale');
-        const useNormalMapCheckbox = document.getElementById('useNormalMap');
-
-        // Albedo controls
-        const brightnessSlider   = document.getElementById('brightness');
-        const contrastSlider     = document.getElementById('contrast');
-        const saturationSlider   = document.getElementById('saturation');
-        const useAlbedoMapCheckbox = document.getElementById('useAlbedoMap');
-
-        // Emission controls
-        const emissionThresholdSlider = document.getElementById('emissionThreshold');
-        const emissionExponentSlider = document.getElementById('emissionExponent');
-        const emissionBlurSlider = document.getElementById('emissionBlur');
-        const emissionColorPicker = document.getElementById('emissionColor');
-        const emissionIntensitySlider = document.getElementById('emissionIntensity');
-        const useEmissionMapCheckbox = document.getElementById('useEmissionMap');
-
-        // Value displays
-        const sigma1Value        = document.getElementById('sigma1Value');
-        const sigma2Value        = document.getElementById('sigma2Value');
-        const heightScaleValue   = document.getElementById('heightScaleValue');
-        const bumpScaleValue     = document.getElementById('bumpScaleValue');
-        const thresholdValue     = document.getElementById('thresholdValue');
-        const strengthValue      = document.getElementById('strengthValue');
-        const normalScaleValue   = document.getElementById('normalScaleValue');
-        const brightnessValue    = document.getElementById('brightnessValue');
-        const contrastValue      = document.getElementById('contrastValue');
-        const saturationValue    = document.getElementById('saturationValue');
-        const emissionThresholdValue = document.getElementById('emissionThresholdValue');
-        const emissionExponentValue = document.getElementById('emissionExponentValue');
-        const emissionBlurValue = document.getElementById('emissionBlurValue');
-        const emissionIntensityValue = document.getElementById('emissionIntensityValue');
-
-        function safeSetSliderValue(slider, valueDisplay, value) {
-            if (slider && valueDisplay) {
-                const v = parseFloat(value) || 0;
-                slider.value = v;
-                valueDisplay.textContent = v;
-            }
-        }
-
-        // Set initial slider values from state
-        safeSetSliderValue(sigma1Slider, sigma1Value, state.bumpOptions.sigma1);
-        safeSetSliderValue(sigma2Slider, sigma2Value, state.bumpOptions.sigma2);
-        safeSetSliderValue(heightScaleSlider, heightScaleValue, state.bumpOptions.heightScale);
-        safeSetSliderValue(bumpScaleSlider, bumpScaleValue, state.bumpOptions.bumpScale);
-        safeSetSliderValue(thresholdSlider, thresholdValue, state.bumpOptions.threshold);
-        safeSetSliderValue(strengthSlider, strengthValue, state.normalOptions.strength);
-        safeSetSliderValue(normalScaleSlider, normalScaleValue, state.normalOptions.normalScale);
-
-        safeSetSliderValue(brightnessSlider, brightnessValue, state.albedoOptions.brightness);
-        safeSetSliderValue(contrastSlider, contrastValue, state.albedoOptions.contrast);
-        safeSetSliderValue(saturationSlider, saturationValue, state.albedoOptions.saturation);
-
-        safeSetSliderValue(emissionThresholdSlider, emissionThresholdValue, state.emissionOptions.threshold);
-        safeSetSliderValue(emissionExponentSlider, emissionExponentValue, state.emissionOptions.exponent);
-        safeSetSliderValue(emissionBlurSlider, emissionBlurValue, state.emissionOptions.blurRadius);
-        safeSetSliderValue(emissionIntensitySlider, emissionIntensityValue, state.emissionOptions.intensity);
-
-        if (emissionColorPicker) {
-            const colorHex = '#' + new THREE.Color(state.emissionOptions.color).getHexString();
-            emissionColorPicker.value = colorHex;
-        }
-
-        if (useNormalMapCheckbox) useNormalMapCheckbox.checked = state.flags.useNormalMap;
-        if (useAlbedoMapCheckbox) useAlbedoMapCheckbox.checked = state.flags.useAlbedoMap;
-        if (useEmissionMapCheckbox) useEmissionMapCheckbox.checked = state.flags.useEmissionMap;
-
-        const self = this;
-        function createSliderListener(slider, valueDisplay, section, key, immediate = false) {
-            if (!slider || !valueDisplay) return;
-            slider.addEventListener('input', () => {
-                const v = parseFloat(slider.value) || 0;
-                valueDisplay.textContent = v;
-                
-                // Update state
-                self.stateManager.updateState({
-                    [section]: { [key]: v }
-                });
-                
-                // Handle immediate effects
-                if (immediate && key === 'normalScale' && self.callbacks.updateNormalScale) {
-                    self.callbacks.updateNormalScale(v);
-                }
-                if (immediate && key === 'intensity' && self.callbacks.updateEmissiveIntensity) {
-                    self.callbacks.updateEmissiveIntensity(v);
-                }
-            });
-            
-            slider.addEventListener('change', () => {
-                if (!immediate && self.callbacks.debouncedApplyMaps) self.callbacks.debouncedApplyMaps();
-            });
-        }
-
-        // Bump listeners
-        createSliderListener(sigma1Slider, sigma1Value, 'bumpOptions', 'sigma1');
-        createSliderListener(sigma2Slider, sigma2Value, 'bumpOptions', 'sigma2');
-        createSliderListener(heightScaleSlider, heightScaleValue, 'bumpOptions', 'heightScale');
-        createSliderListener(bumpScaleSlider, bumpScaleValue, 'bumpOptions', 'bumpScale');
-        createSliderListener(thresholdSlider, thresholdValue, 'bumpOptions', 'threshold');
-
-        // Normal listeners
-        createSliderListener(strengthSlider, strengthValue, 'normalOptions', 'strength');
-        createSliderListener(normalScaleSlider, normalScaleValue, 'normalOptions', 'normalScale', true);
-
-        // Albedo listeners
-        createSliderListener(brightnessSlider, brightnessValue, 'albedoOptions', 'brightness');
-        createSliderListener(contrastSlider, contrastValue, 'albedoOptions', 'contrast');
-        createSliderListener(saturationSlider, saturationValue, 'albedoOptions', 'saturation');
-
-        // Emission listeners
-        createSliderListener(emissionThresholdSlider, emissionThresholdValue, 'emissionOptions', 'threshold');
-        createSliderListener(emissionExponentSlider, emissionExponentValue, 'emissionOptions', 'exponent');
-        createSliderListener(emissionBlurSlider, emissionBlurValue, 'emissionOptions', 'blurRadius');
-        createSliderListener(emissionIntensitySlider, emissionIntensityValue, 'emissionOptions', 'intensity', true);
-
-        if (emissionColorPicker) {
-            emissionColorPicker.addEventListener('input', () => {
-                const color = new THREE.Color(emissionColorPicker.value).getHex();
-                self.stateManager.updateState({
-                    emissionOptions: { color }
-                });
-                
-                if (self.callbacks.updateEmissiveColor) {
-                    self.callbacks.updateEmissiveColor(new THREE.Color(emissionColorPicker.value));
-                }
-            });
-            emissionColorPicker.addEventListener('change', () => {
-                if (self.callbacks.debouncedApplyMaps) self.callbacks.debouncedApplyMaps();
-            });
-        }
-
-        if (useNormalMapCheckbox) {
-            useNormalMapCheckbox.addEventListener('change', () => {
-                self.stateManager.updateState({
-                    flags: { useNormalMap: useNormalMapCheckbox.checked }
-                });
-                
-                if (self.callbacks.toggleNormalMap) {
-                    self.callbacks.toggleNormalMap(useNormalMapCheckbox.checked);
-                }
-            });
-        }
-        
-        if (useAlbedoMapCheckbox) {
-            useAlbedoMapCheckbox.addEventListener('change', () => {
-                self.stateManager.updateState({
-                    flags: { useAlbedoMap: useAlbedoMapCheckbox.checked }
-                });
-                
-                if (self.callbacks.toggleAlbedoMap) {
-                    self.callbacks.toggleAlbedoMap(useAlbedoMapCheckbox.checked);
-                }
-            });
-        }
-        
-        if (useEmissionMapCheckbox) {
-            useEmissionMapCheckbox.addEventListener('change', () => {
-                self.stateManager.updateState({
-                    flags: { useEmissionMap: useEmissionMapCheckbox.checked }
-                });
-                
-                if (self.callbacks.toggleEmissionMap) {
-                    self.callbacks.toggleEmissionMap(useEmissionMapCheckbox.checked);
-                }
-            });
-        }
-
-        const applyButton = document.getElementById('applyChanges');
-        if (applyButton) applyButton.addEventListener('click', () => {
-            if (self.callbacks.applyMaps) self.callbacks.applyMaps();
-        });
-
-        const fileInput = document.getElementById('imageFile');
-        if (fileInput) fileInput.addEventListener('change', this.handleFileSelect.bind(this));
-
-        document.addEventListener('keydown', (event) => {
-            if (event.ctrlKey && event.key === 'Enter') {
-                if (self.callbacks.applyMaps) self.callbacks.applyMaps();
-                event.preventDefault();
-            }
-        });
-    }
+    // Initial rendering on startup
+    this.renderParameterPanel(mapType.value, panel);
+    downloadBtn.textContent = `Download ${mapType.value.charAt(0).toUpperCase() + mapType.value.slice(1)} Map`;
+    downloadBtn.disabled = !this.stateManager.getState().textures[mapType.value + 'Texture'];
+  }
 }

@@ -108,7 +108,11 @@ export class ThreeJsEmissionMapper {
         return new Promise((resolve, reject) => {
             this._cleanupPreviews();
             const img = new Image();
+
+        // ONLY set crossOrigin for *network* URLs, not blob URLs
+        if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
             img.crossOrigin = 'Anonymous';
+        }
 
             img.onload = () => {
                 try {

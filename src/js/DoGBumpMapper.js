@@ -308,8 +308,11 @@ export class ThreeJsDoGBumpMapper {
             this._cleanupPreviews();
             
             const img = new Image();
-            img.crossOrigin = "Anonymous";
-
+        // Only set crossOrigin for HTTP(S) URLs
+        if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+            img.crossOrigin = 'Anonymous';
+        }
+              
             img.onload = () => {
                 if (this.options.debugLogs) {
                     console.log(`[DoGBump] Image loaded (${img.width}×${img.height}):`, img.src);
