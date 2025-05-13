@@ -1,6 +1,6 @@
 body {
   margin: 0;
-  overflow: hidden;
+  overflow: hidden; /* Keep the page overflow hidden as originally intended */
 }
 
 canvas {
@@ -13,6 +13,7 @@ canvas {
   top: 10px;
   left: 10px;
   width: 280px;
+  max-height: calc(100vh - 40px); /* Limit height to viewport minus margins */
   padding: 12px;
   background: rgba(0, 0, 0, 0.7);
   color: white;
@@ -22,12 +23,12 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto; /* Add vertical scrolling */
+  overflow-x: hidden; /* Prevent horizontal scrolling */
 }
 
 /* Map type selector and download/apply buttons */
-#controls label,
-#controls select,
-#controls button {
+#controls label, #controls select, #controls button {
   width: 100%;
 }
 
@@ -69,6 +70,7 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%; /* Ensure the container respects its parent's width */
 }
 
 #file-selection label {
@@ -77,6 +79,8 @@ canvas {
 
 #imageFile {
   width: 100%;
+  max-width: 250px; /* Ensure it doesn't overflow the sidebar */
+  box-sizing: border-box; /* Include padding and border in element's width */
   padding: 6px 8px;
   border-radius: 4px;
   border: 1px solid rgba(255, 255, 255, 0.3);
@@ -102,6 +106,7 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%; /* Ensure it respects parent width */
 }
 
 #parameter-panel .control {

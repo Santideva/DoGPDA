@@ -207,7 +207,7 @@ handleFileSelect(event) {
           span.textContent = input.value;
           this.stateManager.updateState({ [`${type}Options`]: { [cfg.id]: parseFloat(input.value) } });
         });
-        input.addEventListener('change', () => this.callbacks.debouncedApplyMaps && this.callbacks.debouncedApplyMaps(mapType));
+        input.addEventListener('change', () => this.callbacks.debouncedApplyMaps && this.callbacks.debouncedApplyMaps(type));
       }
       if (input.type === 'checkbox') {
         input.addEventListener('change', () => {
