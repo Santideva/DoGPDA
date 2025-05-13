@@ -3,9 +3,19 @@
   "version": "1.0.0",
   "description": "",
   "main": "main.js",
+  "homepage": "https://<your-user>.github.io/<your-repo>/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<your-user>/<your-repo>.git"
+  },
+  "bugs": {
+    "url": "https://github.com/<your-user>/<your-repo>/issues"
+  },
   "scripts": {
     "start": "webpack serve --open",
     "build": "webpack --mode=production",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist",    
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -21,6 +31,7 @@
     "babel-loader": "^10.0.0",
     "copy-webpack-plugin": "^13.0.0",
     "css-loader": "^7.1.2",
+    "gh-pages": "^6.3.0",
     "html-webpack-plugin": "^5.6.3",
     "style-loader": "^4.0.0",
     "webpack": "^5.99.6",

@@ -222,10 +222,11 @@ function setVisualizationMode(mode) {
     } else if (mode === 'albedo' && tex.albedoTexture) {
       mat.map = tex.albedoTexture;
     } else if (mode === 'emission' && tex.emissionTexture) {
-      mat.emissiveMap = tex.emissionTexture;
-      mat.emissive.set(0xffffff);
-      mat.emissiveIntensity = 1.0;
-    }
+        const opts = stateManager.getState().emissionOptions;
+        mat.emissiveMap       = tex.emissionTexture;
+        mat.emissive.copy( new THREE.Color(opts.color) );
+        mat.emissiveIntensity = opts.intensity;
+      }
   
     mat.needsUpdate = true;
   }
@@ -292,7 +293,7 @@ async function applyMaps(mapType = 'bump') {
 
       if (stateManager.getState().flags.pendingUpdate) {
         stateManager.updateState({ flags:{ pendingUpdate:false } });
-        setTimeout(() => applyMaps(mapType), 50);
+        setTimeout(() => applyMaps(mapType.value), 50);
       }
     }
   }

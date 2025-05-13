@@ -130,6 +130,69 @@ handleFileSelect(event) {
   }
 
   /**
+   * Creates a color picker input element and returns the container
+   * @private
+   */
+  _createColorPicker(id, label, value, onChange) {
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('control', 'color-control');
+    
+    const lbl = document.createElement('label');
+    lbl.htmlFor = id;
+    lbl.textContent = label;
+    wrapper.appendChild(lbl);
+    
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.id = id;
+    
+    // Convert number color value to hex string for input
+    const colorValue = '#' + (new THREE.Color(value).getHexString());
+    input.value = colorValue;
+    
+    input.addEventListener('change', () => {
+      // Remove # and convert to number for Three.js
+      const colorHex = parseInt(input.value.replace('#', ''), 16);
+      onChange(colorHex);
+    });
+    
+    wrapper.appendChild(input);
+    return wrapper;
+  }
+  
+  /**
+   * Creates a dropdown select element
+   * @private
+   */
+  _createDropdown(id, label, options, value, onChange) {
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('control');
+    
+    const lbl = document.createElement('label');
+    lbl.htmlFor = id;
+    lbl.textContent = label;
+    wrapper.appendChild(lbl);
+    
+    const select = document.createElement('select');
+    select.id = id;
+    
+    options.forEach(option => {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      select.appendChild(opt);
+    });
+    
+    select.value = value;
+    select.addEventListener('change', () => {
+      onChange(select.value);
+    });
+    
+    wrapper.appendChild(select);
+    return wrapper;
+  }
+
+  /**
    * Builds the parameter controls for the selected map type.
    */
   renderParameterPanel(type, container) {
@@ -188,16 +251,169 @@ handleFileSelect(event) {
         { label: 'Saturation',  id: 'saturation',  min:'0',   max:'2',  step:'0.1', value: state.albedoOptions.saturation }
       ];
     } else if (type === 'emission') {
+      // Basic emission slider controls (keeping these from the original implementation)
       configs = [
-        { label: 'Threshold',       id: 'emissionThreshold',min:'0',  max:'1',  step:'0.01',value: state.emissionOptions.threshold },
-        { label: 'Exponent',        id: 'emissionExponent', min:'0.1',max:'5',  step:'0.1', value: state.emissionOptions.exponent },
-        { label: 'Blur Radius',     id: 'emissionBlur',     min:'0',  max:'50', step:'1',    value: state.emissionOptions.blurRadius },
-        { label: 'Intensity',       id: 'emissionIntensity',min:'0',  max:'5',  step:'0.1', value: state.emissionOptions.intensity },
-        { label: 'Use Emission Map',id: 'useEmissionMap',  checkbox:true,    value: state.flags.useEmissionMap, flagKey: 'useEmissionMap' }
+        { label: 'Threshold',       id: 'emissionThreshold', min:'0',  max:'1',  step:'0.01', value: state.emissionOptions.threshold },
+        { label: 'Exponent',        id: 'emissionExponent',  min:'0.1',max:'5',  step:'0.1',  value: state.emissionOptions.exponent },
+        { label: 'Blur Radius',     id: 'emissionBlur',      min:'0',  max:'50', step:'1',    value: state.emissionOptions.blurRadius },
+        { label: 'Intensity',       id: 'emissionIntensity', min:'0',  max:'5',  step:'0.1',  value: state.emissionOptions.intensity },
       ];
+      
+      // Insert controls and wire up events for slider controls first
+      configs.forEach(cfg => {
+        const { wrapper, input, span } = makeControl(cfg);
+        container.appendChild(wrapper);
+
+        if (input.type === 'range') {
+          input.addEventListener('input', () => {
+            span.textContent = input.value;
+            // Map UI ID to state option key
+            const optionKey = cfg.id.replace('emission', '').toLowerCase();
+            this.stateManager.updateState({ 
+              emissionOptions: { [optionKey]: parseFloat(input.value) }
+            });
+          });
+          input.addEventListener('change', () => {
+            if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+          });
+        }
+      });
+      
+      // Now add the advanced emission options (dropdowns, color picker, checkboxes)
+      
+      // 1. Mode selection dropdown
+      const modeDropdown = this._createDropdown('emissionMode', 'Mode', [
+        { value: 'luminance', label: 'Luminance' },
+        { value: 'channel', label: 'Channel' },
+        { value: 'color', label: 'Color Key' }
+      ], state.emissionOptions.mode, (value) => {
+        this.stateManager.updateState({ emissionOptions: { mode: value }});
+        // Update UI elements visibility based on mode
+        this._updateEmissionControlsVisibility(container, value);
+        if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      container.appendChild(modeDropdown);
+      
+      // 2. Channel selection (visible when mode is 'channel')
+      const channelDropdown = this._createDropdown('emissionChannel', 'Channel', [
+        { value: 'r', label: 'Red' },
+        { value: 'g', label: 'Green' },
+        { value: 'b', label: 'Blue' },
+        { value: 'a', label: 'Alpha' },
+        { value: 'rgb', label: 'RGB Average' },
+        { value: 'max', label: 'Maximum RGB' }
+      ], state.emissionOptions.channel, (value) => {
+        this.stateManager.updateState({ emissionOptions: { channel: value }});
+        if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      channelDropdown.id = 'channelDropdownControl';
+      channelDropdown.style.display = state.emissionOptions.mode === 'channel' ? 'block' : 'none';
+      container.appendChild(channelDropdown);
+      
+      // 3. Color Key controls (visible when mode is 'color')
+      const colorKeyWrapper = document.createElement('div');
+      colorKeyWrapper.id = 'colorKeyControls';
+      colorKeyWrapper.style.display = state.emissionOptions.mode === 'color' ? 'block' : 'none';
+      
+      // 3a. Color key picker
+      const colorKeyPicker = this._createColorPicker('emissionColorKey', 'Key Color', 
+        parseInt(state.emissionOptions.colorKey, 16), (colorHex) => {
+          const colorKeyHex = colorHex.toString(16).padStart(6, '0');
+          this.stateManager.updateState({ emissionOptions: { colorKey: colorKeyHex }});
+          if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      colorKeyWrapper.appendChild(colorKeyPicker);
+      
+      // 3b. Color tolerance slider
+      const { wrapper: toleranceWrapper, input: toleranceInput, span: toleranceSpan } = makeControl({
+        label: 'Color Tolerance', 
+        id: 'colorTolerance',
+        min: '0.01',
+        max: '1',
+        step: '0.01',
+        value: state.emissionOptions.colorTolerance
+      });
+      
+      toleranceInput.addEventListener('input', () => {
+        toleranceSpan.textContent = toleranceInput.value;
+        this.stateManager.updateState({ 
+          emissionOptions: { colorTolerance: parseFloat(toleranceInput.value) }
+        });
+      });
+      
+      toleranceInput.addEventListener('change', () => {
+        if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      
+      colorKeyWrapper.appendChild(toleranceWrapper);
+      container.appendChild(colorKeyWrapper);
+      
+      // 4. Emission glow color picker
+      const emissionColorPicker = this._createColorPicker('emissionColor', 'Glow Color', 
+        state.emissionOptions.color, (colorHex) => {
+          this.stateManager.updateState({ emissionOptions: { color: colorHex }});
+          if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      container.appendChild(emissionColorPicker);
+      
+      // 5. Additional checkbox options
+      const invertMaskControl = makeControl({
+        label: 'Invert Mask',
+        id: 'invertMask',
+        checkbox: true,
+        value: state.emissionOptions.invertMask
+      });
+      
+      invertMaskControl.input.addEventListener('change', () => {
+        this.stateManager.updateState({ 
+          emissionOptions: { invertMask: invertMaskControl.input.checked }
+        });
+        if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      
+      container.appendChild(invertMaskControl.wrapper);
+      
+      const preserveAlphaControl = makeControl({
+        label: 'Preserve Alpha',
+        id: 'preserveAlpha',
+        checkbox: true,
+        value: state.emissionOptions.preserveAlpha
+      });
+      
+      preserveAlphaControl.input.addEventListener('change', () => {
+        this.stateManager.updateState({ 
+          emissionOptions: { preserveAlpha: preserveAlphaControl.input.checked }
+        });
+        if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+      });
+      
+      container.appendChild(preserveAlphaControl.wrapper);
+      
+      // 6. Finally, add the "Use Emission Map" checkbox from the original code
+      const useEmissionMapControl = makeControl({
+        label: 'Use Emission Map',
+        id: 'useEmissionMap',
+        checkbox: true,
+        value: state.flags.useEmissionMap,
+        flagKey: 'useEmissionMap'
+      });
+      
+      useEmissionMapControl.input.addEventListener('change', () => {
+        this.stateManager.updateState({ 
+          flags: { useEmissionMap: useEmissionMapControl.input.checked }
+        });
+        if (this.callbacks.toggleEmissionMap) {
+          this.callbacks.toggleEmissionMap(useEmissionMapControl.input.checked);
+        }
+      });
+      
+      container.appendChild(useEmissionMapControl.wrapper);
+      
+      // No need to append configs in this case since we've handled them specially
+      return;
     }
 
-    // Insert controls and wire up events
+    // Insert controls and wire up events for non-emission types
     configs.forEach(cfg => {
       const { wrapper, input, span } = makeControl(cfg);
       container.appendChild(wrapper);
@@ -207,15 +423,37 @@ handleFileSelect(event) {
           span.textContent = input.value;
           this.stateManager.updateState({ [`${type}Options`]: { [cfg.id]: parseFloat(input.value) } });
         });
-        input.addEventListener('change', () => this.callbacks.debouncedApplyMaps && this.callbacks.debouncedApplyMaps(type));
+        input.addEventListener('change', () => {
+          if (this.callbacks.debouncedApplyMaps) this.callbacks.debouncedApplyMaps(type);
+        });
       }
       if (input.type === 'checkbox') {
         input.addEventListener('change', () => {
           this.stateManager.updateState({ flags: { [cfg.flagKey]: input.checked } });
-          this.callbacks.toggleEmissionMap && this.callbacks.toggleEmissionMap(input.checked);
+          if (this.callbacks.toggleEmissionMap && cfg.flagKey === 'useEmissionMap') {
+            this.callbacks.toggleEmissionMap(input.checked);
+          }
         });
       }
     });
+  }
+
+  /**
+   * Shows/hides emission controls based on the selected mode
+   * @private
+   */
+  _updateEmissionControlsVisibility(container, mode) {
+    // Channel dropdown visibility
+    const channelControl = container.querySelector('#channelDropdownControl');
+    if (channelControl) {
+      channelControl.style.display = mode === 'channel' ? 'block' : 'none';
+    }
+    
+    // Color key controls visibility
+    const colorKeyControls = container.querySelector('#colorKeyControls');
+    if (colorKeyControls) {
+      colorKeyControls.style.display = mode === 'color' ? 'block' : 'none';
+    }
   }
 
   /**

@@ -27,6 +27,12 @@ export class StateManager {
                 blurRadius: 0,
                 color: 0xaaaaaa,
                 intensity: 1.0,
+                mode: 'luminance',         // New: emission mode
+                channel: 'rgb',            // New: channel selection
+                colorKey: 'ffffff',        // New: color key for color mode
+                colorTolerance: 0.1,       // New: tolerance for color matching
+                invertMask: false,         // New: option to invert the mask
+                preserveAlpha: true,       // New: preserve original alpha
                 ...initialState.emissionOptions
             },
             flags: {
@@ -136,7 +142,13 @@ export class StateManager {
                 exponent: 1.0,
                 blurRadius: 0,
                 color: 0xaaaaaa,
-                intensity: 1.0
+                intensity: 1.0,
+                mode: 'luminance',
+                channel: 'rgb',
+                colorKey: 'ffffff',
+                colorTolerance: 0.1,
+                invertMask: false,
+                preserveAlpha: true
             },
             flags: {
                 useNormalMap: true,
